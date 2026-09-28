@@ -1,0 +1,11 @@
+{
+	"runtime": "node",
+	"platform": "telegram",
+	"framework": "grammy",
+	"env": [
+		{
+			"key": "TELEGRAM_TOKEN",
+			"sensitive": true
+		}
+	]
+}

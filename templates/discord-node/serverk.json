@@ -1,0 +1,11 @@
+{
+	"runtime": "node",
+	"platform": "discord",
+	"framework": "discord-js",
+	"env": [
+		{
+			"key": "DISCORD_TOKEN",
+			"sensitive": true
+		}
+	]
+}
