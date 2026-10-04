@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
 	existsSync,
 	mkdirSync,
@@ -129,11 +129,11 @@ const templateStart = (name: string) => {
 };
 
 describe("the detection table", () => {
-	test("is the table the bridge renders, committed beside the launcher", () => {
+	it("is the table the bridge renders, committed beside the launcher", () => {
 		expect(readFileSync(TABLE_FILE, "utf8")).toBe(renderDetectTable());
 	});
 
-	test("matches the launcher's built-in fallback exactly", () => {
+	it("matches the launcher's built-in fallback exactly", () => {
 		expect(JSON.stringify(BUILT_IN_TABLE)).toBe(
 			JSON.stringify({
 				version: DETECT_TABLE.version,
@@ -145,7 +145,7 @@ describe("the detection table", () => {
 		expect(JSON.stringify(tableOf(readFileSync(TABLE_FILE, "utf8")))).toBe(JSON.stringify(BUILT_IN_TABLE));
 	});
 
-	test("falls back to the built-in table when the file is missing or broken", () => {
+	it("falls back to the built-in table when the file is missing or broken", () => {
 		expect(
 			loadDetectTable({
 				SERVERK_DETECT_TABLE: join(ROOT, "no-such-table.json"),
@@ -164,7 +164,7 @@ describe("the detection table", () => {
 });
 
 describe("agreeing with the bridge", () => {
-	test("enforces the same link, branch, commit and id rules", () => {
+	it("enforces the same link, branch, commit and id rules", () => {
 		expect(LAUNCHER_URL_PATTERN.source).toBe(REPO_URL_PATTERN.source);
 		expect(LAUNCHER_BRANCH_PATTERN.source).toBe(REPO_BRANCH_PATTERN.source);
 		expect(LAUNCHER_REF_PATTERN.source).toBe(REPO_REF_PATTERN.source);
@@ -174,7 +174,7 @@ describe("agreeing with the bridge", () => {
 		expect(LAUNCHER_ROOT_LIMIT).toBe(ROOT_DIRECTORY_LENGTH_LIMIT);
 	});
 
-	test("strips exactly the launcher keys the driver hands it, plus its own resume state", () => {
+	it("strips exactly the launcher keys the driver hands it, plus its own resume state", () => {
 		expect(NODE_OPTIONS_KEY).toBe(LAUNCHER_NODE_OPTIONS);
 		expect(
 			[
@@ -201,7 +201,7 @@ describe("agreeing with the bridge", () => {
 		});
 	});
 
-	test("prints deployment lines the bridge writes and reads the same way", () => {
+	it("prints deployment lines the bridge writes and reads the same way", () => {
 		expect(
 			deploymentLine("dep_a1b2c3d4", Outcome.Ready, {
 				commit: SHA,
@@ -237,7 +237,7 @@ describe("agreeing with the bridge", () => {
 		expect(DEPLOYMENT_LINE.exec(failed)?.groups?.stage).toBe("install");
 	});
 
-	test("reads the deploy marker where the bridge writes it, and the ready line the lifecycle waits for", () => {
+	it("reads the deploy marker where the bridge writes it, and the ready line the lifecycle waits for", () => {
 		expect(BRIDGE_DEPLOY_MARKER).toBe(`${BOT_STATE_DIR}/${DEPLOY_MARKER}`);
 		expect(DEFAULT_STATE_DIR).toBe(STATE_DIR);
 		expect(READY_PATTERN.test(READY_LINE)).toBe(true);
@@ -272,12 +272,12 @@ describe("resolving the root directory", () => {
 		return null;
 	};
 
-	test("keeps the checkout root when no root is set and resolves a nested one", () => {
+	it("keeps the checkout root when no root is set and resolves a nested one", () => {
 		expect(resolveProjectDir(root, null, "sync")).toBe(root);
 		expect(resolveProjectDir(root, "apps/bot", "sync")).toBe(realpathSync(join(root, "apps", "bot")));
 	});
 
-	test("names a missing root, a file, a climbing path and an escaping symlink", () => {
+	it("names a missing root, a file, a climbing path and an escaping symlink", () => {
 		symlinkSync(tmpdir(), join(root, "outside"));
 
 		expect(detailOf(() => resolveProjectDir(root, "apps/nope", "snapshot"))).toBe(
@@ -292,7 +292,7 @@ describe("resolving the root directory", () => {
 		);
 	});
 
-	test("refuses a root that resolves inside .serverk or a .git folder", () => {
+	it("refuses a root that resolves inside .serverk or a .git folder", () => {
 		mkdirSync(join(root, ".serverk", "history"), {
 			recursive: true,
 		});
@@ -314,7 +314,7 @@ describe("resolving the root directory", () => {
 });
 
 describe("reading a deploy request", () => {
-	test("reads the JSON marker and drops values that are not safe", () => {
+	it("reads the JSON marker and drops values that are not safe", () => {
 		expect(
 			parseMarker(
 				JSON.stringify({
@@ -346,7 +346,7 @@ describe("reading a deploy request", () => {
 		});
 	});
 
-	test("still takes the timestamp marker older bridges leave", () => {
+	it("still takes the timestamp marker older bridges leave", () => {
 		expect(parseMarker("2026-09-27T10:00:00.000Z\n")).toEqual({
 			deployment: null,
 			ref: null,
@@ -356,7 +356,7 @@ describe("reading a deploy request", () => {
 		expect(parseMarker(null)).toBeNull();
 	});
 
-	test("trusts the configured deployment over the marker and implies one the bot has not run", () => {
+	it("trusts the configured deployment over the marker and implies one the bot has not run", () => {
 		const env = {
 			SERVERK_DEPLOYMENT_ID: "dep_new",
 			SERVERK_REPO_REF: SHA,
@@ -404,7 +404,7 @@ describe("reading a deploy request", () => {
 });
 
 describe("starting the templates", () => {
-	test("runs both templates through their start script", () => {
+	it("runs both templates through their start script", () => {
 		for (const name of [
 			"discord-node",
 			"telegram-node",
@@ -420,7 +420,7 @@ describe("starting the templates", () => {
 		}
 	});
 
-	test("installs both templates with npm ci from their committed lockfile", () => {
+	it("installs both templates with npm ci from their committed lockfile", () => {
 		for (const name of [
 			"discord-node",
 			"telegram-node",
@@ -461,7 +461,7 @@ describe("the templates as the platform inspects them", () => {
 		});
 	};
 
-	test("detects each template cleanly and agrees with the launcher on how to start it", () => {
+	it("detects each template cleanly and agrees with the launcher on how to start it", () => {
 		const expected = {
 			"discord-node": {
 				platform: BotPlatform.Discord,
@@ -496,7 +496,7 @@ describe("the templates as the platform inspects them", () => {
 });
 
 describe("detecting how to start a bot", () => {
-	test("prefers the start command the customer typed over anything in the files", () => {
+	it("prefers the start command the customer typed over anything in the files", () => {
 		expect(
 			detectStart(
 				new Set([
@@ -521,7 +521,7 @@ describe("detecting how to start a bot", () => {
 		});
 	});
 
-	test("reads operators only outside quotes and escapes, and keeps a compound command whole", () => {
+	it("reads operators only outside quotes and escapes, and keeps a compound command whole", () => {
 		expect(hasShellOperator('node -e "a;b"')).toBe(false);
 		expect(hasShellOperator("echo a\\;b")).toBe(false);
 		expect(hasShellOperator("npm run build && node dist/bot.js")).toBe(true);
@@ -532,7 +532,7 @@ describe("detecting how to start a bot", () => {
 		]);
 	});
 
-	test("falls back to main, then the usual entry files, then the Procfile", () => {
+	it("falls back to main, then the usual entry files, then the Procfile", () => {
 		expect(
 			detectStart(
 				new Set([
@@ -563,7 +563,7 @@ describe("detecting how to start a bot", () => {
 		expect(detectStart(new Set(), {})).toBeNull();
 	});
 
-	test("ignores a main that points nowhere or outside the bot folder", () => {
+	it("ignores a main that points nowhere or outside the bot folder", () => {
 		expect(relativeFile("../escape.js")).toBeNull();
 		expect(relativeFile("/abs.js")).toBeNull();
 		expect(relativeFile("./src/index.js")).toBe("src/index.js");
@@ -673,7 +673,7 @@ const kitCommands = (raw: string) => {
 };
 
 describe("wrapping a command in a shell", () => {
-	test("execs a plain command so the bot owns the process and gets the stop signal", () => {
+	it("execs a plain command so the bot owns the process and gets the stop signal", () => {
 		expect(shellCommand("node dist/bot.js")).toEqual([
 			"sh",
 			"-c",
@@ -686,7 +686,7 @@ describe("wrapping a command in a shell", () => {
 		]);
 	});
 
-	test("puts leading assignments behind env so exec still finds the program", () => {
+	it("puts leading assignments behind env so exec still finds the program", () => {
 		expect(shellCommand("NODE_ENV=production node index.js")).toEqual([
 			"sh",
 			"-c",
@@ -699,7 +699,7 @@ describe("wrapping a command in a shell", () => {
 		]);
 	});
 
-	test("runs compound commands, subshells and shell builtins without exec", () => {
+	it("runs compound commands, subshells and shell builtins without exec", () => {
 		for (const command of [
 			"npm run build && node dist/bot.js",
 			"node a.js || node b.js",
@@ -719,7 +719,7 @@ describe("wrapping a command in a shell", () => {
 		}
 	});
 
-	test("splits words on whitespace outside quotes and escapes only", () => {
+	it("splits words on whitespace outside quotes and escapes only", () => {
 		expect(commandWords(`A="x y" node 'a b' c\\ d`)).toEqual([
 			'A="x y"',
 			"node",
@@ -730,13 +730,13 @@ describe("wrapping a command in a shell", () => {
 });
 
 describe("reading serverk.json", () => {
-	test("agrees with the bridge's parser on every sample, broken files included", () => {
+	it("agrees with the bridge's parser on every sample, broken files included", () => {
 		for (const sample of SERVERK_JSON_SAMPLES) {
 			expect(serverkJsonOf(sample), sample.slice(0, 80)).toEqual(kitCommands(sample));
 		}
 	});
 
-	test("starts from the file's command after the customer's own and before anything detected", () => {
+	it("starts from the file's command after the customer's own and before anything detected", () => {
 		const packageJson = {
 			scripts: {
 				start: "node index.js",
@@ -770,7 +770,7 @@ describe("reading serverk.json", () => {
 });
 
 describe("the git environment", () => {
-	test("drops every inherited GIT_ variable and the customer's variables, and pins the config", () => {
+	it("drops every inherited GIT_ variable and the customer's variables, and pins the config", () => {
 		const environment: Record<string, unknown> = gitEnvironment(
 			{
 				PATH: "/usr/bin",
@@ -794,7 +794,7 @@ describe("the git environment", () => {
 		});
 	});
 
-	test("hands the token only through askpass, bound to the repository's host", () => {
+	it("hands the token only through askpass, bound to the repository's host", () => {
 		expect(gitEnvironment({}, "ghs_installation", "https://github.com:8443/you/bot")).toMatchObject({
 			GIT_ASKPASS: "/serverk/git-askpass",
 			SERVERK_GIT_TOKEN: "ghs_installation",
@@ -803,7 +803,7 @@ describe("the git environment", () => {
 		expect(repoHost("https://github.com/you/bot")).toBe("github.com");
 	});
 
-	test("turns off hooks, fsmonitor and every protocol but https on each call", () => {
+	it("turns off hooks, fsmonitor and every protocol but https on each call", () => {
 		expect(gitArgv("fetch")).toEqual([
 			"git",
 			"-c",
@@ -818,7 +818,7 @@ describe("the git environment", () => {
 		]);
 	});
 
-	test("answers askpass only for the repository's own host", () => {
+	it("answers askpass only for the repository's own host", () => {
 		const ask = (prompt: string) => {
 			const result = Bun.spawnSync(
 				[
@@ -855,11 +855,11 @@ describe("the git environment", () => {
 });
 
 describe("recording why a command failed", () => {
-	test("names npm's error code and reason, never the path of its debug log", () => {
+	it("names npm's error code and reason, never the path of its debug log", () => {
 		expect(failureDetail(NPM_404_TRANSCRIPT)).toBe(NPM_404_DETAIL);
 	});
 
-	test("reads an ERESOLVE, the older ERR! style and a transcript with no code line", () => {
+	it("reads an ERESOLVE, the older ERR! style and a transcript with no code line", () => {
 		expect(
 			failureDetail([
 				"npm error code ERESOLVE",
@@ -886,7 +886,7 @@ describe("recording why a command failed", () => {
 		).toBe("npm error 404 Not Found - GET https://registry.npmjs.org/nope - Not found");
 	});
 
-	test("keeps the last informative line of anything that is not npm", () => {
+	it("keeps the last informative line of anything that is not npm", () => {
 		expect(
 			failureDetail([
 				"remote: Repository not found.",
@@ -899,7 +899,7 @@ describe("recording why a command failed", () => {
 });
 
 describe("keeping the history small", () => {
-	test("keeps the current snapshot and the ten newest others, and drops every other tag", () => {
+	it("keeps the current snapshot and the ten newest others, and drops every other tag", () => {
 		const tags = Array.from(
 			{
 				length: 14,
@@ -924,7 +924,7 @@ describe("keeping the history small", () => {
 		]);
 	});
 
-	test("orders snapshots by when they were made, falling back to the commit time", () => {
+	it("orders snapshots by when they were made, falling back to the commit time", () => {
 		expect(
 			newestFirst([
 				"snapshot-a 1790000000 created 1790000000100",
@@ -940,7 +940,7 @@ describe("keeping the history small", () => {
 		]);
 	});
 
-	test("drops stale zips and partial downloads, never the requested one or a fresh download", () => {
+	it("drops stale zips and partial downloads, never the requested one or a fresh download", () => {
 		const dir = mkdtempSync(join(tmpdir(), "bot-node-snapshots-"));
 		const now = Date.now();
 		const old = new Date(now - SNAPSHOT_STALE_MS - 60_000);
@@ -980,7 +980,7 @@ describe("keeping the history small", () => {
 		}
 	});
 
-	test("carries the request and synced source across the tokenless re-exec, and nothing else", () => {
+	it("carries the request and synced source across the tokenless re-exec, and nothing else", () => {
 		const state = {
 			request: {
 				deployment: "dep_1",
@@ -1012,7 +1012,7 @@ describe("keeping the history small", () => {
 });
 
 describe("installing dependencies", () => {
-	test("picks the package manager from the lockfile and npm install without one", () => {
+	it("picks the package manager from the lockfile and npm install without one", () => {
 		expect(
 			detectManager(
 				new Set([
@@ -1034,7 +1034,7 @@ describe("installing dependencies", () => {
 		expect(detectManager(new Set())).toBeNull();
 	});
 
-	test("skips an install whose hash matches and whose node_modules is where it was left", () => {
+	it("skips an install whose hash matches and whose node_modules is where it was left", () => {
 		expect(
 			dependenciesCurrent(
 				{
@@ -1057,7 +1057,7 @@ describe("installing dependencies", () => {
 		expect(dependenciesCurrent(null, "same", true)).toBe(false);
 	});
 
-	test("pulls a branch that has no pinned commit on a redeploy or after ten minutes", () => {
+	it("pulls a branch that has no pinned commit on a redeploy or after ten minutes", () => {
 		const request = {
 			deploy: false,
 			checkout: true,
@@ -1086,7 +1086,7 @@ describe("installing dependencies", () => {
 		).toBe(true);
 	});
 
-	test("lets a checkout land over dependency folders but nothing else", () => {
+	it("lets a checkout land over dependency folders but nothing else", () => {
 		expect(
 			occupiedEntries([
 				".serverk",
@@ -1227,7 +1227,7 @@ describe("running the launcher", () => {
 		});
 	});
 
-	test("deploys an uploaded snapshot, dotfiles included, and announces it before the ready line", () => {
+	it("deploys an uploaded snapshot, dotfiles included, and announces it before the ready line", () => {
 		place(
 			zipOf("one", {
 				"index.js": "run()",
@@ -1260,7 +1260,7 @@ describe("running the launcher", () => {
 		});
 	});
 
-	test("drops files the next snapshot deleted, keeps the bot's own data, and rolls back without a download", () => {
+	it("drops files the next snapshot deleted, keeps the bot's own data, and rolls back without a download", () => {
 		place(
 			zipOf("one", {
 				"index.js": "one()",
@@ -1313,7 +1313,7 @@ describe("running the launcher", () => {
 		expect(historyCount()).toBe(2);
 	});
 
-	test("starts a deployment that already ran without announcing it again", () => {
+	it("starts a deployment that already ran without announcing it again", () => {
 		place(
 			zipOf("one", {
 				"index.js": "one()",
@@ -1335,7 +1335,7 @@ describe("running the launcher", () => {
 		expect(historyCount()).toBe(1);
 	});
 
-	test("ends a failed deployment with the failure line and records it", () => {
+	it("ends a failed deployment with the failure line and records it", () => {
 		const { code, lines } = launch({
 			SERVERK_SNAPSHOT_ID: "snap_missing",
 			SERVERK_DEPLOYMENT_ID: "dep_9",
@@ -1352,7 +1352,7 @@ describe("running the launcher", () => {
 		});
 	});
 
-	test("takes the deploy marker, reinstalls with the customer's install command, and reinstalls when it changes", () => {
+	it("takes the deploy marker, reinstalls with the customer's install command, and reinstalls when it changes", () => {
 		writeFileSync(join(app, "package.json"), "{}");
 		writeFileSync(
 			join(state, DEPLOY_MARKER),
@@ -1385,7 +1385,7 @@ describe("running the launcher", () => {
 		).toContain("serverk: installing dependencies: echo another install");
 	});
 
-	test("fails the install stage on a failing install command and never announces in install mode", () => {
+	it("fails the install stage on a failing install command and never announces in install mode", () => {
 		writeFileSync(join(app, "package.json"), "{}");
 
 		const installMode = launch(
@@ -1471,7 +1471,7 @@ describe("running the launcher", () => {
 		};
 	};
 
-	test("runs a pinned commit from its root directory, never from the checkout root", () => {
+	it("runs a pinned commit from its root directory, never from the checkout root", () => {
 		const remote = gitRemote();
 		const { code, lines } = launch({
 			...remote.env,
@@ -1490,7 +1490,7 @@ describe("running the launcher", () => {
 		expect(existsSync(join(app, "package-lock.json"))).toBe(false);
 	});
 
-	test("runs an uploaded snapshot from its root directory, not beside the sibling files", () => {
+	it("runs an uploaded snapshot from its root directory, not beside the sibling files", () => {
 		place(zipOf("rooted", ROOTED), "snap_r");
 
 		const { code, lines } = launch({
@@ -1510,7 +1510,7 @@ describe("running the launcher", () => {
 		});
 	});
 
-	test("fails the source stage on a missing root, and refuses a root that is not a plain folder path", () => {
+	it("fails the source stage on a missing root, and refuses a root that is not a plain folder path", () => {
 		place(zipOf("rooted", ROOTED), "snap_r");
 
 		const missing = launch({
@@ -1544,7 +1544,7 @@ describe("running the launcher", () => {
 		).toBe("serverk: deployment dep_e failed: sync: root directory escape leaves the bot folder");
 	});
 
-	test("reinstalls when the root directory changes", () => {
+	it("reinstalls when the root directory changes", () => {
 		for (const folder of [
 			"one",
 			"two",
@@ -1596,7 +1596,7 @@ describe("running the launcher", () => {
 		return broken;
 	};
 
-	test("runs a start command that sets a variable before the program", () => {
+	it("runs a start command that sets a variable before the program", () => {
 		writeFileSync(join(app, "index.js"), "console.log('env ' + process.env.NODE_ENV)");
 
 		const { code, lines } = launch({
@@ -1608,7 +1608,7 @@ describe("running the launcher", () => {
 		expect(lines.at(-1)).toBe("env production");
 	});
 
-	test("installs and starts with the commands serverk.json declares", () => {
+	it("installs and starts with the commands serverk.json declares", () => {
 		writeFileSync(join(app, "package.json"), "{}");
 		writeFileSync(
 			join(app, "serverk.json"),
@@ -1628,7 +1628,7 @@ describe("running the launcher", () => {
 		expect(lines.at(-1)).toBe("declared start");
 	});
 
-	test("applies the customer's NODE_OPTIONS to the bot only, never to the launcher or the install", () => {
+	it("applies the customer's NODE_OPTIONS to the bot only, never to the launcher or the install", () => {
 		writeFileSync(join(app, "package.json"), "{}");
 		writeFileSync(join(app, "index.js"), "console.log('bot ' + process.env.NODE_OPTIONS)");
 
@@ -1644,7 +1644,7 @@ describe("running the launcher", () => {
 		expect(lines.at(-1)).toBe("bot --enable-source-maps");
 	});
 
-	test("boots uploaded code after a restore that dropped the history and the zips, and rebuilds the history later", () => {
+	it("boots uploaded code after a restore that dropped the history and the zips, and rebuilds the history later", () => {
 		place(
 			zipOf("one", {
 				"index.js": "one()",
@@ -1706,7 +1706,7 @@ describe("running the launcher", () => {
 		expect(historyCount()).toBe(1);
 	});
 
-	test("keeps the repository's code when the zip that replaces it is corrupt", () => {
+	it("keeps the repository's code when the zip that replaces it is corrupt", () => {
 		const remote = gitRemote();
 
 		expect(
@@ -1738,7 +1738,7 @@ describe("running the launcher", () => {
 		expect(existsSync(join(state, HISTORY_DIR))).toBe(false);
 	});
 
-	test("keeps the uploaded code when the repository that replaces it cannot be fetched", () => {
+	it("keeps the uploaded code when the repository that replaces it cannot be fetched", () => {
 		place(
 			zipOf("one", {
 				"index.js": "one()",
@@ -1763,14 +1763,14 @@ describe("running the launcher", () => {
 
 		expect(failed.code).toBe(1);
 		expect(failed.lines.at(-1)).toStartWith("serverk: deployment dep_2 failed: sync: ");
-		expect(failed.lines.some((line) => line.includes("ما قدرنا نسحب كود بوتك"))).toBe(true);
+		expect(failed.lines.some((line) => line.includes("تعذّر سحب كود بوتك"))).toBe(true);
 		expect(failed.lines.join("\n")).not.toContain("ghs_expired_token");
 		expect(readFileSync(join(app, "index.js"), "utf8")).toBe("one()");
 		expect(existsSync(join(state, HISTORY_DIR))).toBe(true);
 		expect(existsSync(join(app, ".git"))).toBe(false);
 	});
 
-	test("pulls a branch with no pinned commit, then starts the last pulled code when the pull fails", () => {
+	it("pulls a branch with no pinned commit, then starts the last pulled code when the pull fails", () => {
 		const remote = gitRemote();
 		const first = launch({
 			...remote.env,
@@ -1802,7 +1802,7 @@ describe("running the launcher", () => {
 		expect(offline.lines.at(-1)).toBe("the bot ran");
 	});
 
-	test("names a deleted commit only when the repository answers without it", () => {
+	it("names a deleted commit only when the repository answers without it", () => {
 		const remote = gitRemote();
 		const failed = launch({
 			...remote.env,
@@ -1814,10 +1814,10 @@ describe("running the launcher", () => {
 		expect(failed.lines.at(-1)).toStartWith(
 			"serverk: deployment dep_1 failed: sync: commit ffffffffffff is not in the repository",
 		);
-		expect(failed.lines.some((line) => line.includes("ما لقينا الكوميت"))).toBe(true);
+		expect(failed.lines.some((line) => line.includes("الكوميت المطلوب نشره غير موجود"))).toBe(true);
 	});
 
-	test("refuses a repository that tracks .serverk instead of letting it overwrite the stamps", () => {
+	it("refuses a repository that tracks .serverk instead of letting it overwrite the stamps", () => {
 		const remote = gitRemote({
 			"index.js": "run()",
 			".serverk/deployment.json": "{}",
@@ -1839,7 +1839,7 @@ describe("running the launcher", () => {
 		expect(existsSync(join(app, "index.js"))).toBe(false);
 	});
 
-	test("installs and starts with no git token left in the launcher's own environment", () => {
+	it("installs and starts with no git token left in the launcher's own environment", () => {
 		const remote = gitRemote({
 			"index.js": "console.log('bot ' + (process.env.SERVERK_GIT_TOKEN ?? 'none'))",
 			"package.json": "{}",
@@ -1903,7 +1903,7 @@ describe("running the launcher", () => {
 		});
 	};
 
-	test("fails the install stage with npm's reason, not the path of its debug log", () => {
+	it("fails the install stage with npm's reason, not the path of its debug log", () => {
 		const bin = join(root, "npm-404-bin");
 
 		mkdirSync(bin, {
@@ -1938,7 +1938,7 @@ describe("running the launcher", () => {
 		});
 	});
 
-	test("drops a shipped lockfile with its snapshot and installs the next snapshot with npm install", () => {
+	it("drops a shipped lockfile with its snapshot and installs the next snapshot with npm install", () => {
 		const first = deployWithNpm("snap_a", {
 			"package.json": '{"name": "a"}',
 			"package-lock.json": '{"from-source": true}',
@@ -1957,7 +1957,7 @@ describe("running the launcher", () => {
 		expect(second.lines.at(-1)).toBe("the bot ran");
 	});
 
-	test("installs with npm install when the next snapshot ships no lockfile, over the one npm generated before", () => {
+	it("installs with npm install when the next snapshot ships no lockfile, over the one npm generated before", () => {
 		const first = deployWithNpm("snap_a", {
 			"package.json": '{"name": "a"}',
 		});
@@ -1985,7 +1985,7 @@ describe("running the launcher", () => {
 		expect(restart.lines).toContain("serverk: dependencies are up to date (npm-install)");
 	});
 
-	test("installs a repository with npm install after a snapshot whose install generated a lockfile", () => {
+	it("installs a repository with npm install after a snapshot whose install generated a lockfile", () => {
 		expect(
 			deployWithNpm("snap_a", {
 				"package.json": '{"name": "a"}',
@@ -2010,7 +2010,7 @@ describe("running the launcher", () => {
 		expect(switched.lines).toContain(`serverk: deployment dep_git ready at ${remote.sha.slice(0, 12)}`);
 	});
 
-	test("keeps only the current snapshot and the ten before it, and drops stale zips", () => {
+	it("keeps only the current snapshot and the ten before it, and drops stale zips", () => {
 		for (let index = 1; index <= 12; index += 1) {
 			place(
 				zipOf(`s${index}`, {

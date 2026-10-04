@@ -390,29 +390,31 @@ except (zipfile.BadZipFile, zlib.error, OSError, RuntimeError, ValueError, EOFEr
 `;
 
 const SYNC_HINT =
-	"ما قدرنا نسحب كود بوتك من الريبو. تأكد إن الريبو والفرع موجودين، ولو الريبو خاص تأكد إن تطبيق Serverk على GitHub يقدر يوصل له.";
+	"تعذّر سحب كود بوتك من الريبو. تأكد من وجود الريبو والفرع، وإذا كان الريبو خاصًا فتأكد أن تطبيق سيرفرك على GitHub لديه صلاحية الوصول إليه.";
 
-const PINNED_HINT = "ما لقينا الكوميت اللي تبي تنشره في الريبو. يمكن انحذف من الفرع. انشر من جديد من آخر كوميت.";
+const PINNED_HINT = "الكوميت المطلوب نشره غير موجود في الريبو، وقد يكون حُذف من الفرع. انشر من جديد من آخر كوميت.";
 
-const TRACKED_STATE_HINT = "الريبو فيه مجلد .serverk، وهذا الاسم محجوز لسيرفرك. احذف المجلد من الريبو وانشر من جديد.";
+const TRACKED_STATE_HINT =
+	"يحتوي الريبو على مجلد .serverk، وهذا الاسم محجوز لمنصة سيرفرك. احذف المجلد من الريبو وانشر من جديد.";
 
-const LINK_HINT = "رابط الريبو لازم يكون رابط https كامل بدون اسم مستخدم أو كلمة مرور، والفرع اسم فرع Git صحيح.";
+const LINK_HINT =
+	"رابط الريبو أو اسم الفرع غير صحيح. استخدم رابط https كاملًا دون اسم مستخدم أو كلمة مرور، واسم فرع Git صحيحًا.";
 
-const REQUEST_HINT = "طلب النشر هذا ناقص أو غلط. انشر من جديد من صفحة البوت.";
+const REQUEST_HINT = "طلب النشر ناقص أو غير صحيح. انشر من جديد من صفحة البوت.";
 
 const OCCUPIED_HINT =
-	"ملفات بوتك فيها أشياء مو من ريبو Git، فما نقدر نسحب الريبو فوقها. امسح الملفات من مدير الملفات وانشر من جديد.";
+	"يحتوي مجلد بوتك على ملفات ليست من ريبو Git، ولذلك تعذّر سحب الريبو فوقها. احذف الملفات من مدير الملفات وانشر من جديد.";
 
-const SNAPSHOT_MISSING_HINT = "ما لقينا نسخة الكود اللي تبي تنشرها. ارفعها من جديد وانشر.";
+const SNAPSHOT_MISSING_HINT = "نسخة الكود المطلوب نشرها غير موجودة. ارفعها من جديد ثم انشر.";
 
-const SNAPSHOT_BROKEN_HINT = "ملف الكود اللي رفعته فيه مشكلة وما قدرنا نفكّه. تأكد إنه ملف zip سليم وارفعه من جديد.";
+const SNAPSHOT_BROKEN_HINT = "تعذّر فك ضغط ملف الكود المرفوع. تأكد أنه ملف zip سليم وارفعه من جديد.";
 
-const ROOT_HINT = "ما لقينا مجلد الكود اللي حددته داخل ملفات بوتك. تأكد من اسم المجلد في إعدادات بوتك وانشر من جديد.";
+const ROOT_HINT = "مجلد الكود المحدد غير موجود داخل ملفات بوتك. تأكد من اسم المجلد في إعدادات البوت وانشر من جديد.";
 
-const INSTALL_HINT = "ما قدرنا نثبّت مكتبات بوتك. شوف السطور اللي فوق، صلّح package.json وانشر من جديد.";
+const INSTALL_HINT = "تعذّر تثبيت مكتبات بوتك. راجع السطور السابقة في الكونسول، ثم صحّح package.json وانشر من جديد.";
 
 const START_HINT =
-	"ما لقينا طريقة نشغّل فيها بوتك. أضف start في package.json أو ملف index.js، أو حط أمر التشغيل من إعدادات البوت.";
+	"لم نجد طريقة لتشغيل بوتك. أضف start إلى package.json أو ملف index.js، أو اضبط أمر التشغيل من إعدادات البوت.";
 
 export class LaunchFailure extends Error {
 	constructor(stage, arabic, english, detail, code = EXIT_FAILURE) {
@@ -1473,7 +1475,7 @@ const syncGit = async (context) => {
 		throw new LaunchFailure(
 			Stage.Sync,
 			OCCUPIED_HINT,
-			"sync failed: your bot folder already holds files that are not a Git checkout — delete them and deploy again",
+			"sync failed: your bot folder already holds files that are not a Git checkout. Delete them and deploy again",
 			"the bot folder holds files that are not a Git checkout",
 			EXIT_CONFIG,
 		);
@@ -1570,7 +1572,7 @@ const syncGit = async (context) => {
 		}
 
 		if (ref === null && before) {
-			say(`sync failed: ${detail} — starting the last pulled code (${shortCommit(before)})`);
+			say(`sync failed: ${detail}. Starting the last pulled code (${shortCommit(before)})`);
 
 			return {
 				source: Source.Git,
@@ -2432,7 +2434,7 @@ const launch = async (mode, context) => {
 		throw new LaunchFailure(
 			Stage.Start,
 			START_HINT,
-			"start failed: nothing to start — add a start script to package.json or an index.js, or set a start command in the bot's settings",
+			"start failed: nothing to start. Add a start script to package.json or an index.js, or set a start command in the bot's settings",
 			"nothing to start",
 			EXIT_CONFIG,
 		);
