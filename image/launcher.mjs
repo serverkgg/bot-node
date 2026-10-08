@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	closeSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readdirSync,
 	readFileSync,
+	readlinkSync,
+	readSync,
 	realpathSync,
 	rmdirSync,
 	rmSync,
@@ -256,6 +260,12 @@ export const DEPS_STAMP = "deps.json";
 export const SYNC_STAMP = "sync.json";
 
 export const DEPLOYMENT_STAMP = "deployment.json";
+
+export const SOURCE_FILES = "source-files.json";
+
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+const HASH_CHUNK_BYTES = 1024 * 1024;
 
 export const SNAPSHOTS_DIR = "snapshots";
 
@@ -1687,29 +1697,6 @@ const headCommit = async (appDir, env, gitDir = null) => {
 	return result.code === 0 && /^[0-9a-f]{40,64}$/.test(result.stdout) ? result.stdout : null;
 };
 
-const trackedFiles = async (appDir, env, gitDir) => {
-	const result = await run(
-		gitArgv(
-			...(gitDir
-				? [
-						`--git-dir=${gitDir}`,
-						`--work-tree=${appDir}`,
-					]
-				: []),
-			"ls-files",
-			"-z",
-		),
-		{
-			cwd: appDir,
-			env,
-			echo: false,
-			capture: true,
-		},
-	);
-
-	return result.code === 0 ? result.stdout.split("\0").filter((file) => file.length > 0) : [];
-};
-
 const pruneEmptyParents = (appDir, directory) => {
 	let current = directory;
 
@@ -1773,9 +1760,198 @@ const removeFiles = (appDir, files) => {
 	}
 };
 
-const leaveGitSource = async (context) => {
-	const { appDir, env } = context;
-	const gitDir = join(appDir, ".git");
+const treeFiles = async (appDir, env, gitDir, treeish) => {
+	const result = await run(
+		gitArgv(
+			...(gitDir
+				? [
+						`--git-dir=${gitDir}`,
+					]
+				: []),
+			"ls-tree",
+			"-r",
+			"-z",
+			treeish,
+		),
+		{
+			cwd: appDir,
+			env,
+			echo: false,
+			capture: true,
+		},
+	);
+
+	if (result.code !== 0) {
+		throw new Error(result.last);
+	}
+
+	return result.stdout
+		.split("\0")
+		.filter((entry) => entry.split(" ")[1] === "blob" && entry.includes("\t"))
+		.map((entry) => entry.slice(entry.indexOf("\t") + 1));
+};
+
+const ownedFile = (file) => {
+	const segments = file.split("/");
+
+	return (
+		!file.includes("\0")
+		&& segments[0] !== STATE_ENTRY
+		&& segments.every((segment) => segment.length > 0 && segment !== "." && segment !== ".." && segment !== ".git")
+	);
+};
+
+const exists = (path) => {
+	try {
+		lstatSync(path);
+
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const digestOf = (path) => {
+	try {
+		const info = lstatSync(path);
+		const hash = createHash("sha256");
+
+		if (info.isSymbolicLink()) {
+			return hash.update(`link:${readlinkSync(path)}`).digest("hex");
+		}
+
+		if (!info.isFile()) {
+			return null;
+		}
+
+		const buffer = Buffer.allocUnsafe(Math.max(1, Math.min(info.size, HASH_CHUNK_BYTES)));
+		const fd = openSync(path, "r");
+
+		try {
+			for (let read = readSync(fd, buffer); read > 0; read = readSync(fd, buffer)) {
+				hash.update(buffer.subarray(0, read));
+			}
+		} finally {
+			closeSync(fd);
+		}
+
+		return hash.digest("hex");
+	} catch {
+		return null;
+	}
+};
+
+export const readSourceFiles = (stateDir) => {
+	const files = readJson(join(stateDir, SOURCE_FILES))?.files;
+
+	if (typeof files !== "object" || files === null || Array.isArray(files)) {
+		return null;
+	}
+
+	return Object.fromEntries(
+		Object.entries(files).filter(
+			([file, digest]) => ownedFile(file) && typeof digest === "string" && DIGEST_PATTERN.test(digest),
+		),
+	);
+};
+
+export const writeSourceFiles = (stateDir, appDir, files) => {
+	const digests = [
+		...new Set(files),
+	]
+		.sort()
+		.map((file) => [
+			file,
+			digestOf(join(appDir, file)),
+		])
+		.filter(([, digest]) => digest !== null);
+
+	writeJson(join(stateDir, SOURCE_FILES), {
+		files: Object.fromEntries(digests),
+	});
+};
+
+const droppedFiles = (appDir, previous, carried) => {
+	const kept = new Set(carried);
+	const unchanged = [];
+
+	let changed = 0;
+
+	for (const [file, digest] of Object.entries(previous)) {
+		if (kept.has(file)) {
+			continue;
+		}
+
+		const current = digestOf(join(appDir, file));
+
+		if (current === digest) {
+			unchanged.push(file);
+		} else if (current !== null) {
+			changed += 1;
+		}
+	}
+
+	return {
+		unchanged,
+		changed,
+	};
+};
+
+const clearWay = (appDir, carried) => {
+	let removed = 0;
+
+	for (const file of carried) {
+		const segments = file.split("/");
+
+		for (let depth = 1; depth <= segments.length; depth += 1) {
+			const path = join(appDir, ...segments.slice(0, depth));
+
+			let directory;
+
+			try {
+				directory = lstatSync(path).isDirectory();
+			} catch {
+				break;
+			}
+
+			if (depth === segments.length ? directory : !directory) {
+				rmSync(path, {
+					force: true,
+					recursive: true,
+				});
+
+				removed += 1;
+
+				break;
+			}
+		}
+	}
+
+	if (removed > 0) {
+		say(`removed ${removed} ${removed === 1 ? "path" : "paths"} in the way of the source's files`);
+	}
+};
+
+const filesWord = (count) => {
+	return count === 1 ? "file" : "files";
+};
+
+const removeDropped = (appDir, dropped) => {
+	removeFiles(appDir, dropped.unchanged);
+
+	const removed = dropped.unchanged.filter((file) => !exists(join(appDir, file))).length;
+
+	if (removed > 0) {
+		say(`removed ${removed} ${filesWord(removed)} the source no longer carries`);
+	}
+
+	if (dropped.changed > 0) {
+		say(`kept ${dropped.changed} changed ${filesWord(dropped.changed)} the source no longer carries`);
+	}
+};
+
+const leaveGitSource = (context) => {
+	const gitDir = join(context.appDir, ".git");
 
 	if (!isDirectory(gitDir)) {
 		return;
@@ -1783,16 +1959,14 @@ const leaveGitSource = async (context) => {
 
 	say("switching from the repository to uploaded code");
 
-	removeFiles(appDir, await trackedFiles(appDir, gitEnvironment(env, null, null), null));
 	rmSync(gitDir, {
 		force: true,
 		recursive: true,
 	});
 };
 
-const leaveSnapshotSource = async (context) => {
-	const { appDir, stateDir, env } = context;
-	const historyDir = join(stateDir, HISTORY_DIR);
+const leaveSnapshotSource = (context) => {
+	const historyDir = join(context.stateDir, HISTORY_DIR);
 
 	if (!isDirectory(historyDir)) {
 		return;
@@ -1800,7 +1974,6 @@ const leaveSnapshotSource = async (context) => {
 
 	say("switching from uploaded code to the repository");
 
-	removeFiles(appDir, await trackedFiles(appDir, gitEnvironment(env, null, null), historyDir));
 	rmSync(historyDir, {
 		force: true,
 		recursive: true,
@@ -1932,9 +2105,13 @@ const syncGit = async (context) => {
 		return result.code === 0 && result.stdout.trim().length > 0;
 	};
 
+	const previous = readSourceFiles(stateDir) ?? {};
+
 	say(ref ? `fetching ${repo} at ${shortCommit(ref)}` : `pulling ${repo} (${branch})`);
 
 	let created = false;
+	let carried = [];
+	let dropped = null;
 
 	try {
 		if (!checkout) {
@@ -1972,7 +2149,13 @@ const syncGit = async (context) => {
 			throw new SyncRefusal(STATE_TRACKED, TRACKED_STATE_HINT);
 		}
 
-		await leaveSnapshotSource(context);
+		carried = await treeFiles(appDir, gitEnv, null, target);
+
+		clearWay(appDir, carried);
+
+		dropped = droppedFiles(appDir, previous, carried);
+
+		await git("read-tree", "--empty");
 
 		if (ref === null) {
 			await git("checkout", "--quiet", "--force", "-B", branch, "FETCH_HEAD");
@@ -2010,6 +2193,10 @@ const syncGit = async (context) => {
 
 		throw new LaunchFailure(Stage.Sync, SYNC_HINT, `sync failed: ${detail}`, detail);
 	}
+
+	leaveSnapshotSource(context);
+	removeDropped(appDir, dropped);
+	writeSourceFiles(stateDir, appDir, carried);
 
 	const after = await headCommit(appDir, gitEnv);
 
@@ -2337,9 +2524,13 @@ const syncSnapshot = async (context) => {
 		);
 	}
 
-	await leaveGitSource(context);
+	const previous = readSourceFiles(stateDir) ?? {};
+
+	leaveGitSource(context);
 
 	const message = request.deployment ? `deployment ${request.deployment}` : `snapshot ${id}`;
+
+	let carried = [];
 
 	try {
 		if (!isDirectory(historyDir)) {
@@ -2354,12 +2545,8 @@ const syncSnapshot = async (context) => {
 		if (incoming !== null) {
 			say(`unpacking snapshot ${id}`);
 
-			const previous = await trackedFiles(appDir, gitEnv, historyDir);
-
-			removeFiles(
-				appDir,
-				previous.filter((file) => !incoming.has(file)),
-			);
+			clearWay(appDir, incoming);
+			removeDropped(appDir, droppedFiles(appDir, previous, incoming));
 
 			const written = await snapshotFiles("extract", archive, appDir, env);
 			const list = join(stateDir, "snapshot-files");
@@ -2424,9 +2611,21 @@ const syncSnapshot = async (context) => {
 			rmSync(archive, {
 				force: true,
 			});
+
+			carried = written;
 		} else {
 			say(`restoring snapshot ${id}`);
 
+			carried = await treeFiles(appDir, gitEnv, historyDir, tag);
+
+			clearWay(appDir, carried);
+
+			const dropped = droppedFiles(appDir, previous, carried);
+
+			await history([
+				"read-tree",
+				"--empty",
+			]);
 			await history([
 				"checkout",
 				"--quiet",
@@ -2434,10 +2633,14 @@ const syncSnapshot = async (context) => {
 				"--detach",
 				tag,
 			]);
+
+			removeDropped(appDir, dropped);
 		}
 	} catch (error) {
 		throw broken(error);
 	}
+
+	writeSourceFiles(stateDir, appDir, carried);
 
 	try {
 		await pruneHistory(history, tag);

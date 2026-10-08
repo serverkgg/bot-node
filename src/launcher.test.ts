@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -85,6 +86,7 @@ import {
 	procfileCommand,
 	READY_LINE,
 	RESUME_KEY,
+	readSourceFiles,
 	relativeFile,
 	repoHost,
 	resolveProjectDir,
@@ -92,6 +94,7 @@ import {
 	resumeStateOf,
 	SNAPSHOT_STALE_MS,
 	SNAPSHOTS_DIR,
+	SOURCE_FILES,
 	Stage,
 	serverkJsonOf,
 	shellCommand,
@@ -102,6 +105,7 @@ import {
 	syncDue,
 	tableOf,
 	toolEnvironment,
+	writeSourceFiles,
 } from "../image/launcher.mjs";
 import { READY_LINE as READY_PATTERN } from "./lifecycle";
 import { LAUNCHER_NODE_OPTIONS, STATE_DIR } from "./shared";
@@ -1247,6 +1251,73 @@ const BUILD_SCRIPT = {
 	},
 };
 
+describe("recording the files a deployment wrote", () => {
+	it("reads back the hash of each file it wrote, and none outside the bot's own files", () => {
+		const dir = mkdtempSync(join(tmpdir(), "bot-node-source-files-"));
+		const sha = (content: string) => createHash("sha256").update(content).digest("hex");
+
+		try {
+			expect(readSourceFiles(dir)).toBeNull();
+
+			mkdirSync(join(dir, "src"));
+			writeFileSync(join(dir, "a.js"), "a");
+			writeFileSync(join(dir, "src", "b.js"), "b");
+			writeSourceFiles(dir, dir, [
+				"src/b.js",
+				"a.js",
+				"src/b.js",
+				"missing.js",
+			]);
+
+			expect(readSourceFiles(dir)).toEqual({
+				"a.js": sha("a"),
+				"src/b.js": sha("b"),
+			});
+
+			writeFileSync(
+				join(dir, SOURCE_FILES),
+				JSON.stringify({
+					files: {
+						"kept.js": sha("kept"),
+						".gitignore": sha("ignore"),
+						"short.js": "abc",
+						"number.js": 7,
+						".serverk/deployment.json": sha("x"),
+						".git/config": sha("x"),
+						"lib/.git/HEAD": sha("x"),
+						"../outside.js": sha("x"),
+						"lib/../up.js": sha("x"),
+						"/etc/passwd": sha("x"),
+						"lib//double.js": sha("x"),
+						"./here.js": sha("x"),
+					},
+				}),
+			);
+
+			expect(readSourceFiles(dir)).toEqual({
+				"kept.js": sha("kept"),
+				".gitignore": sha("ignore"),
+			});
+
+			writeFileSync(
+				join(dir, SOURCE_FILES),
+				JSON.stringify({
+					files: [
+						"a.js",
+					],
+				}),
+			);
+
+			expect(readSourceFiles(dir)).toBeNull();
+		} finally {
+			rmSync(dir, {
+				force: true,
+				recursive: true,
+			});
+		}
+	});
+});
+
 describe("installing dependencies", () => {
 	it("reads the packageManager field before any lockfile, yarn 2 and later as Yarn Berry", () => {
 		expect(
@@ -2097,6 +2168,19 @@ const ROOTED = {
 	"README.md": "sibling",
 };
 
+const RUNTIME_FILES = {
+	"data/bot.sqlite": "rows",
+	"cache.json": "{}",
+};
+
+const REMOVED_ONE = "serverk: removed 1 file the source no longer carries";
+
+const REMOVED_TWO = "serverk: removed 2 files the source no longer carries";
+
+const KEPT_ONE = "serverk: kept 1 changed file the source no longer carries";
+
+const IN_THE_WAY_ONE = "serverk: removed 1 path in the way of the source's files";
+
 describe("running the launcher", () => {
 	let root = "";
 	let app = "";
@@ -2191,6 +2275,37 @@ describe("running the launcher", () => {
 		return botDeploymentStateSchema.parse(JSON.parse(readFileSync(join(state, DEPLOYMENT_STAMP), "utf8")));
 	};
 
+	const writeRuntime = () => {
+		for (const [file, content] of Object.entries(RUNTIME_FILES)) {
+			mkdirSync(join(app, file, ".."), {
+				recursive: true,
+			});
+			writeFileSync(join(app, file), content);
+		}
+	};
+
+	const expectRuntimeKept = () => {
+		for (const [file, content] of Object.entries(RUNTIME_FILES)) {
+			expect(readFileSync(join(app, file), "utf8")).toBe(content);
+		}
+	};
+
+	const recorded = () => {
+		return Object.keys(readSourceFiles(state) ?? {});
+	};
+
+	const loseHistory = () => {
+		for (const dir of [
+			HISTORY_DIR,
+			SNAPSHOTS_DIR,
+		]) {
+			rmSync(join(state, dir), {
+				force: true,
+				recursive: true,
+			});
+		}
+	};
+
 	beforeEach(() => {
 		root = mkdtempSync(join(tmpdir(), "bot-node-launcher-"));
 		app = join(root, "app");
@@ -2242,11 +2357,13 @@ describe("running the launcher", () => {
 		});
 	});
 
-	it("drops files the next snapshot deleted, keeps the bot's own data, and rolls back without a download", () => {
+	it("keeps the bot's own files and the dropped files it changed, replaces what a snapshot carries and drops the rest, on a deploy and a rollback", () => {
 		place(
 			zipOf("one", {
 				"index.js": "one()",
+				"config.json": "one",
 				"lib/old.js": "old",
+				"lib/tuned.js": "tuned",
 			}),
 			"snap_1",
 		);
@@ -2254,25 +2371,38 @@ describe("running the launcher", () => {
 			SERVERK_SNAPSHOT_ID: "snap_1",
 			SERVERK_DEPLOYMENT_ID: "dep_1",
 		});
-		writeFileSync(join(app, "data.db"), "runtime");
+		writeRuntime();
+		writeFileSync(join(app, "config.json"), "edited");
+		writeFileSync(join(app, "lib", "tuned.js"), "mine");
 
 		place(
 			zipOf("two", {
 				"index.js": "two()",
+				"config.json": "two",
 			}),
 			"snap_2",
 		);
 
-		expect(
-			launch({
-				SERVERK_SNAPSHOT_ID: "snap_2",
-				SERVERK_DEPLOYMENT_ID: "dep_2",
-			}).code,
-		).toBe(0);
-		expect(existsSync(join(app, "lib"))).toBe(false);
+		const second = launch({
+			SERVERK_SNAPSHOT_ID: "snap_2",
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+		});
+
+		expect(second.code).toBe(0);
+		expect(second.lines).toContain(REMOVED_ONE);
+		expect(second.lines).toContain(KEPT_ONE);
+		expect(existsSync(join(app, "lib", "old.js"))).toBe(false);
+		expect(readFileSync(join(app, "lib", "tuned.js"), "utf8")).toBe("mine");
 		expect(readFileSync(join(app, "index.js"), "utf8")).toBe("two()");
-		expect(readFileSync(join(app, "data.db"), "utf8")).toBe("runtime");
+		expect(readFileSync(join(app, "config.json"), "utf8")).toBe("two");
+		expect(recorded()).toEqual([
+			"config.json",
+			"index.js",
+		]);
+		expectRuntimeKept();
 		expect(historyCount()).toBe(2);
+
+		writeFileSync(join(app, "config.json"), "edited");
 
 		const rollback = launch({
 			SERVERK_SNAPSHOT_ID: "snap_1",
@@ -2280,21 +2410,27 @@ describe("running the launcher", () => {
 		});
 
 		expect(rollback.lines).toContain("serverk: restoring snapshot snap_1");
+		expect(rollback.lines.some((line) => line.startsWith("serverk: removed"))).toBe(false);
 		expect(stamp()).toMatchObject({
 			deployment: "dep_3",
 			outcome: "ready",
 		});
 		expect(readFileSync(join(app, "lib", "old.js"), "utf8")).toBe("old");
-		expect(readFileSync(join(app, "data.db"), "utf8")).toBe("runtime");
+		expect(readFileSync(join(app, "lib", "tuned.js"), "utf8")).toBe("tuned");
+		expect(readFileSync(join(app, "config.json"), "utf8")).toBe("one");
+		expectRuntimeKept();
 		expect(historyCount()).toBe(2);
 
-		expect(
-			launch({
-				SERVERK_SNAPSHOT_ID: "snap_2",
-				SERVERK_DEPLOYMENT_ID: "dep_4",
-			}).lines,
-		).toContain("serverk: restoring snapshot snap_2");
+		const forward = launch({
+			SERVERK_SNAPSHOT_ID: "snap_2",
+			SERVERK_DEPLOYMENT_ID: "dep_4",
+		});
+
+		expect(forward.lines).toContain("serverk: restoring snapshot snap_2");
+		expect(forward.lines).toContain(REMOVED_TWO);
 		expect(readFileSync(join(app, "index.js"), "utf8")).toBe("two()");
+		expect(existsSync(join(app, "lib"))).toBe(false);
+		expectRuntimeKept();
 		expect(historyCount()).toBe(2);
 	});
 
@@ -2530,6 +2666,11 @@ describe("running the launcher", () => {
 	const gitRemote = (files: Record<string, string> | null = null) => {
 		const work = join(root, "remote-work");
 		const bare = join(root, "sample.git");
+
+		mkdirSync(work, {
+			recursive: true,
+		});
+
 		const git = (cwd: string, ...args: string[]) => {
 			return Bun.spawnSync(
 				[
@@ -2549,24 +2690,34 @@ describe("running the launcher", () => {
 				.trim();
 		};
 
-		for (const [file, content] of Object.entries(files ?? ROOTED)) {
-			mkdirSync(join(work, file, ".."), {
-				recursive: true,
-			});
-			writeFileSync(join(work, file), content);
-		}
+		const commit = (tree: Record<string, string>) => {
+			for (const [file, content] of Object.entries(tree)) {
+				mkdirSync(join(work, file, ".."), {
+					recursive: true,
+				});
+				writeFileSync(join(work, file), content);
+			}
+
+			git(work, "add", "--all");
+			git(work, "commit", "--quiet", "-m", "next");
+			git(work, "push", "--quiet", bare, "main");
+
+			return git(work, "rev-parse", "HEAD");
+		};
 
 		git(root, "init", "--quiet", "--bare", bare);
 		git(work, "init", "--quiet", "-b", "main");
-		git(work, "add", "--all");
-		git(work, "commit", "--quiet", "-m", "one");
-		git(work, "push", "--quiet", bare, "main");
 
 		return {
-			sha: git(work, "rev-parse", "HEAD"),
+			sha: commit(files ?? ROOTED),
 			env: {
 				PATH: wrappedPath(bare),
 				SERVERK_REPO_URL: REMOTE,
+			},
+			next: (tree: Record<string, string>) => {
+				git(work, "rm", "--quiet", "-r", ".");
+
+				return commit(tree);
 			},
 		};
 	};
@@ -2592,6 +2743,271 @@ describe("running the launcher", () => {
 		expect(readFileSync(join(app, "README.md"), "utf8")).toBe("sibling");
 		expect(existsSync(join(app, "app", "package-lock.json"))).toBe(true);
 		expect(existsSync(join(app, "package-lock.json"))).toBe(false);
+	});
+
+	it("keeps the bot's own files and the dropped files it changed, replaces what a commit carries and drops the rest, on a deploy, a rollback and a pull", () => {
+		const remote = gitRemote({
+			"index.js": "one()",
+			"config.json": "one",
+			"commands/old.js": "old",
+			"commands/tuned.js": "tuned",
+		});
+		const two = remote.next({
+			"index.js": "two()",
+			"config.json": "two",
+		});
+		const deploy = (env: Record<string, string>, deployment: string) => {
+			return launch({
+				...remote.env,
+				...env,
+				SERVERK_DEPLOYMENT_ID: deployment,
+			});
+		};
+
+		expect(
+			deploy(
+				{
+					SERVERK_REPO_REF: remote.sha,
+				},
+				"dep_1",
+			).code,
+		).toBe(0);
+
+		writeRuntime();
+		writeFileSync(join(app, "config.json"), "edited");
+		writeFileSync(join(app, "commands", "tuned.js"), "mine");
+
+		const second = deploy(
+			{
+				SERVERK_REPO_REF: two,
+			},
+			"dep_2",
+		);
+
+		expect(second.code).toBe(0);
+		expect(second.lines).toContain(REMOVED_ONE);
+		expect(second.lines).toContain(KEPT_ONE);
+		expect(existsSync(join(app, "commands", "old.js"))).toBe(false);
+		expect(readFileSync(join(app, "commands", "tuned.js"), "utf8")).toBe("mine");
+		expect(readFileSync(join(app, "index.js"), "utf8")).toBe("two()");
+		expect(readFileSync(join(app, "config.json"), "utf8")).toBe("two");
+		expect(recorded()).toEqual([
+			"config.json",
+			"index.js",
+		]);
+		expectRuntimeKept();
+
+		writeFileSync(join(app, "config.json"), "edited");
+
+		const rollback = deploy(
+			{
+				SERVERK_REPO_REF: remote.sha,
+			},
+			"dep_3",
+		);
+
+		expect(rollback.code).toBe(0);
+		expect(rollback.lines.some((line) => line.startsWith("serverk: removed"))).toBe(false);
+		expect(readFileSync(join(app, "commands", "old.js"), "utf8")).toBe("old");
+		expect(readFileSync(join(app, "commands", "tuned.js"), "utf8")).toBe("tuned");
+		expect(readFileSync(join(app, "config.json"), "utf8")).toBe("one");
+		expectRuntimeKept();
+
+		const pull = deploy(
+			{
+				SERVERK_REPO_BRANCH: "main",
+			},
+			"dep_4",
+		);
+
+		expect(pull.lines).toContain(REMOVED_TWO);
+		expect(stamp()).toMatchObject({
+			deployment: "dep_4",
+			commit: two,
+			outcome: "ready",
+		});
+		expect(existsSync(join(app, "commands"))).toBe(false);
+		expectRuntimeKept();
+	});
+
+	it("lets a snapshot's folder replace a file the author changed at its path, and its file replace a folder", () => {
+		place(
+			zipOf("one", {
+				"index.js": "one()",
+				extras: "file",
+			}),
+			"snap_1",
+		);
+		launch({
+			SERVERK_SNAPSHOT_ID: "snap_1",
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		});
+		writeRuntime();
+		writeFileSync(join(app, "extras"), "mine");
+		place(
+			zipOf("two", {
+				"index.js": "two()",
+				"extras/a.js": "a",
+			}),
+			"snap_2",
+		);
+
+		const second = launch({
+			SERVERK_SNAPSHOT_ID: "snap_2",
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+		});
+
+		expect(second.code).toBe(0);
+		expect(second.lines).toContain(IN_THE_WAY_ONE);
+		expect(second.lines.some((line) => line.startsWith("serverk: kept"))).toBe(false);
+		expect(readFileSync(join(app, "extras", "a.js"), "utf8")).toBe("a");
+		expect(recorded()).toEqual([
+			"extras/a.js",
+			"index.js",
+		]);
+
+		writeFileSync(join(app, "extras", "a.js"), "mine");
+		place(
+			zipOf("three", {
+				"index.js": "three()",
+				extras: "file again",
+			}),
+			"snap_3",
+		);
+
+		const third = launch({
+			SERVERK_SNAPSHOT_ID: "snap_3",
+			SERVERK_DEPLOYMENT_ID: "dep_3",
+		});
+
+		expect(third.code).toBe(0);
+		expect(third.lines).toContain(IN_THE_WAY_ONE);
+		expect(readFileSync(join(app, "extras"), "utf8")).toBe("file again");
+		expectRuntimeKept();
+	});
+
+	it("lets a commit's folder replace a file the author changed at its path", () => {
+		const remote = gitRemote({
+			"index.js": "one()",
+			extras: "file",
+		});
+		const two = remote.next({
+			"index.js": "two()",
+			"extras/a.js": "a",
+		});
+
+		expect(
+			launch({
+				...remote.env,
+				SERVERK_REPO_REF: remote.sha,
+				SERVERK_DEPLOYMENT_ID: "dep_1",
+			}).code,
+		).toBe(0);
+
+		writeRuntime();
+		writeFileSync(join(app, "extras"), "mine");
+
+		const second = launch({
+			...remote.env,
+			SERVERK_REPO_REF: two,
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+		});
+
+		expect(second.code).toBe(0);
+		expect(second.lines).toContain(IN_THE_WAY_ONE);
+		expect(second.lines.some((line) => line.startsWith("serverk: kept"))).toBe(false);
+		expect(readFileSync(join(app, "extras", "a.js"), "utf8")).toBe("a");
+		expect(recorded()).toEqual([
+			"extras/a.js",
+			"index.js",
+		]);
+		expectRuntimeKept();
+	});
+
+	it("drops what the last deployment wrote after a restore lost the history, and after the .git folder was deleted", () => {
+		place(
+			zipOf("one", {
+				"index.js": "one()",
+				"lib/old.js": "old",
+			}),
+			"snap_1",
+		);
+		launch({
+			SERVERK_SNAPSHOT_ID: "snap_1",
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		});
+		writeRuntime();
+
+		expect(recorded()).toEqual([
+			"index.js",
+			"lib/old.js",
+		]);
+
+		loseHistory();
+		place(
+			zipOf("two", {
+				"index.js": "two()",
+				"extra.js": "extra",
+			}),
+			"snap_2",
+		);
+
+		const second = launch({
+			SERVERK_SNAPSHOT_ID: "snap_2",
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+		});
+
+		expect(second.code).toBe(0);
+		expect(second.lines).toContain(REMOVED_ONE);
+		expect(existsSync(join(app, "lib"))).toBe(false);
+		expect(recorded()).toEqual([
+			"extra.js",
+			"index.js",
+		]);
+		expectRuntimeKept();
+
+		loseHistory();
+
+		const remote = gitRemote({
+			"index.js": "git()",
+			"config.json": "one",
+		});
+		const third = launch({
+			...remote.env,
+			SERVERK_REPO_REF: remote.sha,
+			SERVERK_DEPLOYMENT_ID: "dep_3",
+		});
+
+		expect(third.code).toBe(0);
+		expect(third.lines).toContain(REMOVED_ONE);
+		expect(existsSync(join(app, "extra.js"))).toBe(false);
+		expect(recorded()).toEqual([
+			"config.json",
+			"index.js",
+		]);
+		expectRuntimeKept();
+
+		rmSync(join(app, ".git"), {
+			force: true,
+			recursive: true,
+		});
+
+		const fourth = launch({
+			...remote.env,
+			SERVERK_REPO_REF: remote.next({
+				"index.js": "git2()",
+			}),
+			SERVERK_DEPLOYMENT_ID: "dep_4",
+		});
+
+		expect(fourth.code).toBe(0);
+		expect(fourth.lines).toContain(REMOVED_ONE);
+		expect(existsSync(join(app, "config.json"))).toBe(false);
+		expect(readFileSync(join(app, "index.js"), "utf8")).toBe("git2()");
+		expect(recorded()).toEqual([
+			"index.js",
+		]);
+		expectRuntimeKept();
 	});
 
 	it("runs an uploaded snapshot from its root directory, not beside the sibling files", () => {
