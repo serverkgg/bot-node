@@ -3,7 +3,7 @@
 كل سطر يبدأ بـ `serverk:` صادر منا وليس من بوتك، ويوضح ما نفّذناه قبل أن يبدأ:
 
 - `deploying ...`: بدأ نشر جديد.
-- `fetching ... at ...` أو `unpacking snapshot ...`: نسحب الكوميت من الريبو، أو نفك الكود الذي رفعته.
+- `fetching ... at ...` أو `unpacking snapshot ...`: نسحب الـ commit من الريبو، أو نفك الكود الذي رفعته.
 - `installing dependencies ...`: نثبّت المكتبات.
 - `dependencies are up to date`: لم يتغيّر شيء، فلم نعد التثبيت.
 - `deployment ... ready at ...`: نجح النشر.
@@ -25,7 +25,7 @@ TypeError: Cannot read properties of undefined (reading 'send')
 
 ## أشهر الأخطاء
 
-- `deployment ... failed: sync: ...`: تعذّر سحب الكوميت. تأكد من وجود الريبو والفرع، ومن أن تطبيق Serverk على GitHub يصل إلى الريبو.
+- `deployment ... failed: sync: ...`: تعذّر سحب الـ commit. تأكد من وجود الريبو والفرع، ومن أن تطبيق Serverk على GitHub يصل إلى الريبو.
 - `deployment ... failed: sync: repository tracks .serverk`: في الريبو مجلد `.serverk`، وهذا الاسم محجوز لمنصة سيرفرك. احذف المجلد من الريبو وانشر من جديد.
 - `deployment ... failed: install: ...`: فشل تثبيت المكتبات، والسطر يوضح السبب. غالبًا يكون `package-lock.json` غير متوافق مع `package.json`، فشغّل `npm install` على جهازك وارفع ملف القفل الجديد.
 - `deployment ... failed: start: nothing to start`: لم نجد طريقة لتشغيل بوتك. أضف `start` إلى `package.json`، أو اضبط أمر التشغيل من إعدادات بوتك.
