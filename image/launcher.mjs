@@ -31,7 +31,7 @@ export const GIT_ASKPASS = "/serverk/git-askpass";
 
 export const DETECT_TABLE_PATH = "/serverk/detect.json";
 
-export const DETECT_TABLE_VERSION = 1;
+export const DETECT_TABLE_VERSION = 2;
 
 export const REPO_URL_PATTERN = /^https:\/\/[^\s@/]+\/\S+$/;
 
@@ -112,6 +112,10 @@ export const BUILT_IN_TABLE = {
 	},
 	node: {
 		manifest: "package.json",
+		managerField: "packageManager",
+		berryFile: ".yarnrc.yml",
+		enginesKey: "node",
+		buildScript: "build",
 		startFiles: [
 			"index.js",
 			"src/index.js",
@@ -121,6 +125,22 @@ export const BUILT_IN_TABLE = {
 		],
 		lockfiles: [
 			{
+				file: "pnpm-lock.yaml",
+				manager: "pnpm",
+			},
+			{
+				file: "bun.lock",
+				manager: "bun",
+			},
+			{
+				file: "bun.lockb",
+				manager: "bun",
+			},
+			{
+				file: "yarn.lock",
+				manager: "yarn",
+			},
+			{
 				file: "package-lock.json",
 				manager: "npm",
 			},
@@ -128,37 +148,102 @@ export const BUILT_IN_TABLE = {
 				file: "npm-shrinkwrap.json",
 				manager: "npm",
 			},
-			{
-				file: "pnpm-lock.yaml",
-				manager: "pnpm",
-			},
-			{
-				file: "yarn.lock",
-				manager: "yarn",
-			},
 		],
 		installCommands: {
+			locked: {
+				npm: [
+					"npm",
+					"ci",
+				],
+				pnpm: [
+					"corepack",
+					"pnpm",
+					"install",
+					"--frozen-lockfile",
+				],
+				yarn: [
+					"corepack",
+					"yarn",
+					"install",
+					"--frozen-lockfile",
+				],
+				"yarn-berry": [
+					"corepack",
+					"yarn",
+					"install",
+					"--immutable",
+				],
+				bun: [
+					"bun",
+					"install",
+					"--frozen-lockfile",
+				],
+			},
+			unlocked: {
+				npm: [
+					"npm",
+					"install",
+				],
+				pnpm: [
+					"corepack",
+					"pnpm",
+					"install",
+				],
+				yarn: [
+					"corepack",
+					"yarn",
+					"install",
+				],
+				"yarn-berry": [
+					"corepack",
+					"yarn",
+					"install",
+					"--no-immutable",
+				],
+				bun: [
+					"bun",
+					"install",
+				],
+			},
+		},
+		runCommands: {
 			npm: [
 				"npm",
-				"ci",
+				"run",
 			],
 			pnpm: [
 				"corepack",
 				"pnpm",
-				"install",
-				"--frozen-lockfile",
+				"run",
 			],
 			yarn: [
 				"corepack",
 				"yarn",
-				"install",
+				"run",
 			],
-			"npm-install": [
-				"npm",
-				"install",
+			"yarn-berry": [
+				"corepack",
+				"yarn",
+				"run",
+			],
+			bun: [
+				"bun",
+				"run",
 			],
 		},
-		unlockedManager: "npm-install",
+		versionFiles: [
+			{
+				file: ".nvmrc",
+			},
+			{
+				file: ".node-version",
+			},
+			{
+				file: ".tool-versions",
+				tool: "nodejs",
+			},
+		],
+		defaultVersion: "24",
 	},
 };
 
@@ -188,10 +273,15 @@ export const SNAPSHOT_STALE_MS = 15 * 60 * 1000;
 
 export const PARTIAL_SUFFIX = ".partial";
 
+export const CACHE_DIR = "cache";
+
+export const CACHE_MANIFEST = '{"type":"commonjs"}';
+
 export const Stage = {
 	Sync: "sync",
 	Snapshot: "snapshot",
 	Install: "install",
+	Build: "build",
 	Start: "start",
 };
 
@@ -279,6 +369,26 @@ const NO_EXEC_WORDS = new Set([
 
 const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+const NPM = "npm";
+
+const YARN = "yarn";
+
+const YARN_BERRY = "yarn-berry";
+
+const ENGINE_MANAGERS = [
+	"pnpm",
+	"bun",
+	YARN,
+];
+
+const MANAGER_FIELD = /^(npm|pnpm|yarn|bun)@(\d+)/;
+
+const VERSION_NUMBER = /^v?(\d+(?:\.\d+)*)/;
+
+const RANGE_COMPARATOR = /^(>=|<=|>|<|=|\^|~)?v?(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/;
+
+const HYPHEN_RANGE = /(\S+)\s+-\s+(\S+)/g;
+
 const GIT_HARDENING = [
 	"-c",
 	"core.hooksPath=/dev/null",
@@ -305,6 +415,8 @@ const GIT_ENVIRONMENT_KEYS = [
 const STATE_TRACKED = "repository tracks .serverk";
 
 const DETAIL_LIMIT = 200;
+
+export const OUT_OF_MEMORY_DETAIL = "out-of-memory";
 
 const COMMIT_LENGTH = 12;
 
@@ -413,8 +525,16 @@ const ROOT_HINT = "مجلد الكود المحدد غير موجود داخل �
 
 const INSTALL_HINT = "تعذّر تثبيت مكتبات بوتك. راجع السطور السابقة في الكونسول، ثم صحّح package.json وانشر من جديد.";
 
+const BUILD_HINT =
+	"تعذّر بناء كود بوتك. راجع السطور السابقة في الكونسول، ثم صحّح أمر البناء في package.json أو serverk.json وانشر من جديد.";
+
 const START_HINT =
 	"لم نجد طريقة لتشغيل بوتك. أضف start إلى package.json أو ملف index.js، أو اضبط أمر التشغيل من إعدادات البوت.";
+
+const MEMORY_HINTS = {
+	install: "نفدت الرام أثناء تثبيت مكتبات بوتك، فتوقف التثبيت. ارفع الباقة للحصول على رام أكثر، ثم انشر من جديد.",
+	build: "نفدت الرام أثناء بناء كود بوتك، فتوقف البناء. ارفع الباقة للحصول على رام أكثر، ثم انشر من جديد.",
+};
 
 export class LaunchFailure extends Error {
 	constructor(stage, arabic, english, detail, code = EXIT_FAILURE) {
@@ -428,6 +548,19 @@ export class LaunchFailure extends Error {
 		this.code = code;
 	}
 }
+
+export const stageFailure = (stage, hint, result) => {
+	if (result.killed) {
+		return new LaunchFailure(
+			stage,
+			MEMORY_HINTS[stage],
+			`${stage} failed: it ran out of memory and was stopped`,
+			OUT_OF_MEMORY_DETAIL,
+		);
+	}
+
+	return new LaunchFailure(stage, hint, `${stage} failed: ${result.last}`, result.last);
+};
 
 export const say = (line) => {
 	process.stdout.write(`serverk: ${line}\n`);
@@ -560,6 +693,49 @@ const serverkJsonRulesOf = (rules) => {
 	};
 };
 
+const recordOf = (value) => {
+	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+};
+
+const versionKeyPattern = (key) => {
+	return `^${key}\\s*=\\s*"?([^"\\s]+)`;
+};
+
+const optionalString = (value) => {
+	return value === undefined || typeof value === "string";
+};
+
+const lockfilesOf = (value) => {
+	const valid =
+		Array.isArray(value)
+		&& value.length > 0
+		&& value.every((entry) => typeof entry?.file === "string" && typeof entry?.manager === "string");
+
+	return valid ? value : null;
+};
+
+const versionFilesOf = (value) => {
+	const valid =
+		Array.isArray(value)
+		&& value.every(
+			(entry) =>
+				typeof entry?.file === "string"
+				&& optionalString(entry.tool)
+				&& optionalString(entry.prefix)
+				&& optionalString(entry.key)
+				&& (entry.key === undefined || compiles(versionKeyPattern(entry.key))),
+		);
+
+	return valid ? value : null;
+};
+
+const commandsOf = (value, managers) => {
+	const valid =
+		typeof value === "object" && value !== null && managers.every((manager) => stringList(value[manager])?.length);
+
+	return valid ? value : null;
+};
+
 export const tableOf = (raw) => {
 	const table = parseObject(raw);
 	const node = table?.node;
@@ -569,29 +745,45 @@ export const tableOf = (raw) => {
 	if (
 		table?.version !== DETECT_TABLE_VERSION
 		|| typeof node !== "object"
+		|| node === null
 		|| typeof procfile !== "object"
+		|| procfile === null
 		|| serverkJson === null
 	) {
 		return null;
 	}
 
-	const lockfiles = Array.isArray(node.lockfiles)
-		? node.lockfiles.filter((entry) => typeof entry?.file === "string" && typeof entry?.manager === "string")
-		: [];
-	const commands =
-		typeof node.installCommands === "object" && node.installCommands !== null ? node.installCommands : {};
+	const lockfiles = lockfilesOf(node.lockfiles);
+	const managers = [
+		...(lockfiles ?? []).map((entry) => entry.manager),
+		YARN_BERRY,
+		...ENGINE_MANAGERS,
+		NPM,
+	];
+	const locked = commandsOf(node.installCommands?.locked, managers);
+	const unlocked = commandsOf(node.installCommands?.unlocked, managers);
+	const runCommands = commandsOf(node.runCommands, managers);
+	const versionFiles = versionFilesOf(node.versionFiles);
+	const names = [
+		node.manifest,
+		node.managerField,
+		node.berryFile,
+		node.enginesKey,
+		node.buildScript,
+		node.defaultVersion,
+	];
 
 	if (
-		typeof node.manifest !== "string"
+		!names.every((name) => typeof name === "string")
 		|| !stringList(node.startFiles)
-		|| lockfiles.length === 0
-		|| typeof node.unlockedManager !== "string"
-		|| ![
-			...lockfiles.map((entry) => entry.manager),
-			node.unlockedManager,
-		].every((manager) => stringList(commands[manager])?.length)
+		|| lockfiles === null
+		|| locked === null
+		|| unlocked === null
+		|| runCommands === null
+		|| versionFiles === null
 		|| typeof procfile.file !== "string"
 		|| typeof procfile.line !== "string"
+		|| !compiles(procfile.line)
 		|| !stringList(procfile.processes)
 	) {
 		return null;
@@ -607,10 +799,19 @@ export const tableOf = (raw) => {
 		serverkJson,
 		node: {
 			manifest: node.manifest,
+			managerField: node.managerField,
+			berryFile: node.berryFile,
+			enginesKey: node.enginesKey,
+			buildScript: node.buildScript,
 			startFiles: node.startFiles,
 			lockfiles,
-			installCommands: commands,
-			unlockedManager: node.unlockedManager,
+			installCommands: {
+				locked,
+				unlocked,
+			},
+			runCommands,
+			versionFiles,
+			defaultVersion: node.defaultVersion,
 		},
 	};
 };
@@ -823,6 +1024,7 @@ export const serverkJsonOf = (raw, table = BUILT_IN_TABLE) => {
 	const envKey = new RegExp(rules.envKey);
 	const start = declaredCommand(document.start, rules.commandLengthLimit);
 	const install = declaredCommand(document.install, rules.commandLengthLimit);
+	const build = declaredCommand(document.build, rules.commandLengthLimit);
 	const env = document.env;
 	const envValid =
 		env === undefined
@@ -837,6 +1039,7 @@ export const serverkJsonOf = (raw, table = BUILT_IN_TABLE) => {
 		|| !optionalChoice(document.framework, rules.frameworks)
 		|| !start.ok
 		|| !install.ok
+		|| !build.ok
 		|| !envValid
 	) {
 		return null;
@@ -845,6 +1048,7 @@ export const serverkJsonOf = (raw, table = BUILT_IN_TABLE) => {
 	return {
 		start: start.value,
 		install: install.value,
+		build: build.value,
 	};
 };
 
@@ -886,6 +1090,15 @@ export const detectStart = (files, packageJson, options = {}, table = BUILT_IN_T
 		};
 	}
 
+	const procfile = options.procfile ? procfileCommand(options.procfile, table) : null;
+
+	if (procfile) {
+		return {
+			source: "procfile",
+			argv: shellCommand(procfile),
+		};
+	}
+
 	const script = packageJson?.scripts?.start;
 
 	if (typeof script === "string" && script.trim().length > 0) {
@@ -919,36 +1132,232 @@ export const detectStart = (files, packageJson, options = {}, table = BUILT_IN_T
 		};
 	}
 
-	const procfile = options.procfile ? procfileCommand(options.procfile, table) : null;
+	return null;
+};
 
-	if (procfile) {
+const lockfileOf = (manager, files, table) => {
+	const lockManager = manager === YARN_BERRY ? YARN : manager;
+
+	return table.node.lockfiles.find((entry) => entry.manager === lockManager && files.has(entry.file)) ?? null;
+};
+
+const managerPlan = (manager, lock) => {
+	return {
+		manager,
+		locked: lock !== null,
+		lockfile: lock?.file ?? null,
+	};
+};
+
+export const detectManager = (files, packageJson, table = BUILT_IN_TABLE) => {
+	if (!files.has(table.node.manifest)) {
+		return null;
+	}
+
+	const declared = packageJson?.[table.node.managerField];
+	const field = typeof declared === "string" ? MANAGER_FIELD.exec(declared.trim()) : null;
+
+	if (field) {
+		const manager = field[1] === YARN && Number(field[2]) >= 2 ? YARN_BERRY : field[1];
+
+		return managerPlan(manager, lockfileOf(manager, files, table));
+	}
+
+	const lock = table.node.lockfiles.find((entry) => entry.manager !== NPM && files.has(entry.file));
+
+	if (lock) {
+		return managerPlan(lock.manager === YARN && files.has(table.node.berryFile) ? YARN_BERRY : lock.manager, lock);
+	}
+
+	if (files.has(table.node.berryFile)) {
+		return managerPlan(YARN_BERRY, null);
+	}
+
+	const engines = recordOf(packageJson?.engines);
+	const engine = ENGINE_MANAGERS.find((manager) => typeof engines[manager] === "string");
+
+	if (engine) {
+		return managerPlan(engine, null);
+	}
+
+	return managerPlan(NPM, lockfileOf(NPM, files, table));
+};
+
+export const installArgv = (plan, table = BUILT_IN_TABLE) => {
+	const commands = plan.locked ? table.node.installCommands.locked : table.node.installCommands.unlocked;
+
+	return commands[plan.manager];
+};
+
+export const buildCommand = (serverkJson, packageJson, manager, table = BUILT_IN_TABLE) => {
+	if (serverkJson?.build) {
 		return {
-			source: "procfile",
-			argv: shellCommand(procfile),
+			command: serverkJson.build,
+			argv: shellCommand(serverkJson.build),
 		};
+	}
+
+	const script = recordOf(packageJson?.scripts)[table.node.buildScript];
+	const runner = table.node.runCommands[manager];
+
+	if (typeof script !== "string" || script.trim().length === 0 || !runner) {
+		return null;
+	}
+
+	const argv = [
+		...runner,
+		table.node.buildScript,
+	];
+
+	return {
+		command: argv.join(" "),
+		argv,
+	};
+};
+
+const versionFromFile = (content, spec) => {
+	for (const raw of content.split("\n")) {
+		let line = raw.trim();
+
+		if (line.length === 0 || line.startsWith("#")) {
+			continue;
+		}
+
+		if (spec.tool !== undefined) {
+			const [tool, ...rest] = line.split(/\s+/);
+
+			if (tool !== spec.tool) {
+				continue;
+			}
+
+			line = rest[0] ?? "";
+		}
+
+		if (spec.key !== undefined) {
+			const match = new RegExp(versionKeyPattern(spec.key)).exec(line);
+
+			if (!match) {
+				continue;
+			}
+
+			line = match[1] ?? "";
+		}
+
+		if (spec.prefix !== undefined) {
+			if (!line.startsWith(spec.prefix)) {
+				return null;
+			}
+
+			line = line.slice(spec.prefix.length);
+		}
+
+		return VERSION_NUMBER.exec(line)?.[1] ?? null;
 	}
 
 	return null;
 };
 
-export const detectManager = (files, table = BUILT_IN_TABLE) => {
-	const locked = table.node.lockfiles.find((entry) => files.has(entry.file));
+const versionFromFiles = (specs, read, parts) => {
+	for (const spec of specs) {
+		const content = read(spec.file);
 
-	if (locked) {
-		return {
-			manager: locked.manager,
-			lockfile: locked.file,
-		};
-	}
+		if (content === null) {
+			continue;
+		}
 
-	if (files.has(table.node.manifest)) {
-		return {
-			manager: table.node.unlockedManager,
-			lockfile: null,
-		};
+		const version = versionFromFile(content, spec);
+
+		if (version !== null) {
+			return version.split(".").slice(0, parts).join(".");
+		}
 	}
 
 	return null;
+};
+
+const comparatorAdmits = (comparator, major) => {
+	const match = RANGE_COMPARATOR.exec(comparator);
+
+	if (!match) {
+		return null;
+	}
+
+	const base = Number(match[2]);
+	const minor = match[3];
+
+	switch (match[1] ?? "") {
+		case ">=":
+			return major >= base;
+		case ">":
+			return minor === undefined ? major > base : major >= base;
+		case "<":
+			return major < base || (major === base && minor !== undefined && minor !== "0");
+		case "<=":
+			return major <= base;
+		default:
+			return major === base;
+	}
+};
+
+const comparatorsOf = (clause) => {
+	return clause
+		.replace(HYPHEN_RANGE, ">=$1 <=$2")
+		.trim()
+		.split(/\s+/)
+		.filter((token) => token.length > 0);
+};
+
+const rangeAdmits = (range, major) => {
+	return range.split("||").some((clause) => {
+		const verdicts = comparatorsOf(clause).map((token) => comparatorAdmits(token, major));
+
+		return verdicts.length === 0 || verdicts.some((verdict) => verdict === null) || verdicts.every(Boolean);
+	});
+};
+
+const requestedMajorOf = (range) => {
+	const comparators = range
+		.split("||")
+		.flatMap(comparatorsOf)
+		.map((token) => RANGE_COMPARATOR.exec(token))
+		.filter((match) => match !== null);
+	const lower = comparators.filter((match) => match[1] !== "<" && match[1] !== "<=").map((match) => Number(match[2]));
+
+	if (lower.length > 0) {
+		return String(Math.min(...lower));
+	}
+
+	const upper = comparators.map((match) => (match[1] === "<" ? Number(match[2]) - 1 : Number(match[2])));
+
+	return upper.length === 0 ? null : String(Math.max(...upper));
+};
+
+export const nodeRequirementOf = (packageJson, read, major, table = BUILT_IN_TABLE) => {
+	const engine = recordOf(packageJson?.engines)[table.node.enginesKey];
+
+	if (typeof engine === "string" && engine.trim().length > 0) {
+		const version = requestedMajorOf(engine);
+
+		if (version !== null) {
+			return {
+				version,
+				unmet: !rangeAdmits(engine, major),
+			};
+		}
+	}
+
+	const version = versionFromFiles(table.node.versionFiles, read, 1);
+
+	return version === null
+		? null
+		: {
+				version,
+				unmet: Number(version) !== major,
+			};
+};
+
+const runtimeMajor = () => {
+	return Number(process.versions.node.split(".")[0]);
 };
 
 export const dependencyHash = (parts) => {
@@ -1000,6 +1409,23 @@ export const resolveRequest = (env, marker, legacyReinstall, stamp) => {
 		reinstall: marker?.reinstall === true || legacyReinstall,
 		deploying: marker !== null || legacyReinstall || implied,
 	};
+};
+
+export const startRetryOf = (request, stamp, synced) => {
+	if (
+		request.deploying
+		|| stamp?.outcome !== Outcome.Failed
+		|| stamp.stage !== Stage.Start
+		|| typeof stamp.deployment !== "string"
+	) {
+		return null;
+	}
+
+	if (stamp.source === Source.Git) {
+		return synced?.source === Source.Git && synced.commit === stamp.commit ? stamp : null;
+	}
+
+	return synced?.source === Source.Local ? stamp : null;
 };
 
 export const occupiedEntries = (entries) => {
@@ -1178,6 +1604,7 @@ const run = (argv, options) => {
 		child.on("error", (error) => {
 			resolve({
 				code: 127,
+				killed: false,
 				last: redact(error.message).slice(0, DETAIL_LIMIT),
 				stdout: "",
 			});
@@ -1188,6 +1615,7 @@ const run = (argv, options) => {
 
 			resolve({
 				code: code ?? 1,
+				killed: signal === "SIGKILL",
 				last: Array.from(detail).slice(0, DETAIL_LIMIT).join(""),
 				stdout: options.capture ? captured : (lastOutput ?? ""),
 			});
@@ -2113,12 +2541,55 @@ export const resolveProjectDir = (appDir, root, stage) => {
 export const toolEnvironment = (env, stateDir) => {
 	return {
 		...botEnvironment(env),
-		npm_config_cache: env.npm_config_cache ?? join(stateDir, "cache", "npm"),
+		npm_config_cache: env.npm_config_cache ?? join(stateDir, CACHE_DIR, "npm"),
 		npm_config_update_notifier: "false",
 		npm_config_fund: "false",
 		npm_config_audit: "false",
-		COREPACK_HOME: env.COREPACK_HOME ?? join(stateDir, "cache", "corepack"),
+		COREPACK_HOME: join(stateDir, CACHE_DIR, "corepack"),
 		COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+		BUN_INSTALL_CACHE_DIR: join(stateDir, CACHE_DIR, "bun"),
+		CI: "true",
+	};
+};
+
+export const ensureCacheManifest = (stateDir) => {
+	const cacheDir = join(stateDir, CACHE_DIR);
+
+	mkdirSync(cacheDir, {
+		recursive: true,
+	});
+
+	try {
+		writeFileSync(join(cacheDir, "package.json"), CACHE_MANIFEST, {
+			flag: "wx",
+		});
+	} catch (error) {
+		if (error?.code !== "EEXIST") {
+			throw error;
+		}
+	}
+};
+
+const binPath = (projectDir, env) => {
+	return `${join(projectDir, "node_modules", ".bin")}:${env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`;
+};
+
+export const buildEnvironment = (env, stateDir, projectDir) => {
+	return {
+		...toolEnvironment(env, stateDir),
+		PATH: binPath(projectDir, env),
+	};
+};
+
+export const startEnvironment = (env, projectDir) => {
+	return {
+		...botEnvironment(env),
+		...(env[NODE_OPTIONS_KEY] !== undefined
+			? {
+					NODE_OPTIONS: env[NODE_OPTIONS_KEY],
+				}
+			: {}),
+		PATH: binPath(projectDir, env),
 	};
 };
 
@@ -2164,18 +2635,32 @@ export const carriedBy = (listing, prefix) => {
 	return (file) => listing === null || prefix === null || listing.has(`${prefix}${file}`);
 };
 
-const installDependencies = async (context) => {
-	const { appDir, projectDir, stateDir, env, reinstall, table } = context;
-	const declared = serverkJsonOf(readText(join(projectDir, table.serverkJson.file)), table);
-	const installCommand = text(env.SERVERK_INSTALL_COMMAND) ?? declared?.install ?? null;
+const projectOf = async (context) => {
+	const { appDir, projectDir, env, table } = context;
 	const carried = carriedBy(await sourceListing(context), projectPrefix(appDir, projectDir));
+	const read = (file) => (carried(file) ? readText(join(projectDir, file)) : null);
+	const serverkJson = serverkJsonOf(readText(join(projectDir, table.serverkJson.file)), table);
 	const present = new Set(
 		[
 			table.node.manifest,
+			table.node.berryFile,
 			...table.node.lockfiles.map((entry) => entry.file),
 		].filter((file) => isFile(join(projectDir, file)) && carried(file)),
 	);
-	const plan = detectManager(present, table);
+	const packageJson = parseObject(read(table.node.manifest));
+
+	return {
+		serverkJson,
+		installCommand: text(env.SERVERK_INSTALL_COMMAND) ?? serverkJson?.install ?? null,
+		packageJson,
+		plan: detectManager(present, packageJson, table),
+		read,
+	};
+};
+
+const installDependencies = async (context, project) => {
+	const { projectDir, stateDir, env, reinstall, table } = context;
+	const { installCommand, plan } = project;
 
 	if (!plan && !installCommand) {
 		say("no package.json, skipping dependencies");
@@ -2183,11 +2668,20 @@ const installDependencies = async (context) => {
 		return;
 	}
 
+	const major = runtimeMajor();
+	const requirement = plan ? nodeRequirementOf(project.packageJson, project.read, major, table) : null;
+
+	if (requirement?.unmet) {
+		say(`the code asks for Node ${requirement.version}, this runtime is Node ${major}`);
+	}
+
 	const modules = join(projectDir, "node_modules");
 	const stampPath = join(stateDir, DEPS_STAMP);
 	const manager = installCommand ? "custom" : plan.manager;
+	const argv = installCommand ? shellCommand(installCommand) : installArgv(plan, table);
+	const shown = installCommand ?? argv.join(" ");
 	const hash = dependencyHash([
-		installCommand ?? plan.manager,
+		shown,
 		process.version,
 		text(env.SERVERK_ROOT_DIRECTORY) ?? "",
 		readText(join(projectDir, table.node.manifest)) ?? "",
@@ -2213,9 +2707,7 @@ const installDependencies = async (context) => {
 		force: true,
 	});
 
-	const argv = installCommand ? shellCommand(installCommand) : table.node.installCommands[plan.manager];
-
-	say(`installing dependencies: ${installCommand ?? argv.join(" ")}`);
+	say(`installing dependencies: ${shown}`);
 
 	const result = await run(argv, {
 		cwd: projectDir,
@@ -2223,7 +2715,7 @@ const installDependencies = async (context) => {
 	});
 
 	if (result.code !== 0) {
-		throw new LaunchFailure(Stage.Install, INSTALL_HINT, `install failed: ${result.last}`, result.last);
+		throw stageFailure(Stage.Install, INSTALL_HINT, result);
 	}
 
 	writeJson(stampPath, {
@@ -2232,9 +2724,42 @@ const installDependencies = async (context) => {
 		manager,
 		runtime: process.version,
 		installedAt: new Date().toISOString(),
+		built: false,
 	});
 
 	say("dependencies installed");
+};
+
+const buildProject = async (context, build) => {
+	const { projectDir, stateDir, env, request } = context;
+	const stampPath = join(stateDir, DEPS_STAMP);
+	const stamp = readJson(stampPath);
+
+	if (!request.deploying && stamp?.built !== false) {
+		say("no new deployment or install, skipping the build");
+
+		return;
+	}
+
+	say(`building: ${build.command}`);
+
+	const result = await run(build.argv, {
+		cwd: projectDir,
+		env: buildEnvironment(env, stateDir, projectDir),
+	});
+
+	if (result.code !== 0) {
+		throw stageFailure(Stage.Build, BUILD_HINT, result);
+	}
+
+	if (stamp !== null) {
+		writeJson(stampPath, {
+			...stamp,
+			built: true,
+		});
+	}
+
+	say("build finished");
 };
 
 const resolveStart = (projectDir, env, table) => {
@@ -2293,14 +2818,34 @@ const recordDeployment = (context, outcome, details) => {
 		stage: details.stage ?? null,
 		detail: details.detail ?? null,
 		finishedAt: new Date().toISOString(),
+		settled: outcome === Outcome.Failed,
 	});
 
-	process.stdout.write(
-		`${deploymentLine(request.deployment, outcome, {
-			...details,
-			commit: source === Source.Git ? commit : null,
-		})}\n`,
-	);
+	if (outcome === Outcome.Ready) {
+		return;
+	}
+
+	process.stdout.write(`${deploymentLine(request.deployment, outcome, details)}\n`);
+};
+
+const retryStart = (context) => {
+	const stampPath = join(context.stateDir, DEPLOYMENT_STAMP);
+	const retry = startRetryOf(context.request, readJson(stampPath), context.synced);
+
+	if (retry === null) {
+		return;
+	}
+
+	writeJson(stampPath, {
+		...retry,
+		outcome: Outcome.Ready,
+		stage: null,
+		detail: null,
+		finishedAt: new Date().toISOString(),
+		settled: false,
+	});
+
+	say(`starting deployment ${retry.deployment} again, it goes live once the bot proves itself`);
 };
 
 export const resumeStateOf = (raw) => {
@@ -2417,13 +2962,29 @@ const launch = async (mode, context) => {
 	context.projectDir = resolveProjectDir(appDir, text(env.SERVERK_ROOT_DIRECTORY), sourceStage(context.request));
 
 	context.stage = Stage.Install;
-	await installDependencies({
-		...context,
-		reinstall: context.request.reinstall,
-	});
+
+	ensureCacheManifest(stateDir);
+
+	const project = await projectOf(context);
+
+	await installDependencies(
+		{
+			...context,
+			reinstall: context.request.reinstall,
+		},
+		project,
+	);
 
 	if (mode === "install") {
 		process.exit(0);
+	}
+
+	const build = buildCommand(project.serverkJson, project.packageJson, project.plan?.manager ?? null, context.table);
+
+	if (build) {
+		context.stage = Stage.Build;
+
+		await buildProject(context, build);
 	}
 
 	context.stage = Stage.Start;
@@ -2441,17 +3002,10 @@ const launch = async (mode, context) => {
 	}
 
 	recordDeployment(context, Outcome.Ready, context.synced);
+	retryStart(context);
 
 	const [program, ...args] = start.argv;
-	const execEnv = {
-		...botEnvironment(env),
-		...(env[NODE_OPTIONS_KEY] !== undefined
-			? {
-					NODE_OPTIONS: env[NODE_OPTIONS_KEY],
-				}
-			: {}),
-		PATH: `${join(context.projectDir, "node_modules", ".bin")}:${env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`,
-	};
+	const execEnv = startEnvironment(env, context.projectDir);
 
 	say(`start command: ${start.argv.join(" ")}`);
 	process.stdout.write(`${READY_LINE}\n`);

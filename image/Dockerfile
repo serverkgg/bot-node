@@ -6,6 +6,8 @@ LABEL gg.serverk.bridge.version="${BRIDGE_VERSION}"
 
 LABEL org.opencontainers.image.source="https://github.com/serverkgg/bot-node"
 
+COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -20,9 +22,12 @@ RUN set -eux; \
     groupadd -g 1000 container; \
     useradd -M -d /home/container -u 1000 -g 1000 -s /usr/sbin/nologin container; \
     mkdir -p /home/container /serverk/run; \
+    ln -s /usr/local/bin/bun /usr/local/bin/bunx; \
     corepack enable; \
     node --version; \
     npm --version; \
+    bun --version; \
+    bunx --version; \
     git --version
 
 ENV TZ=UTC \

@@ -18,14 +18,17 @@ import {
 	BotDeploymentOutcome,
 	BotDeploymentStage,
 	BotFramework,
+	BotInspectWarning,
 	BotPlatform,
 	BotRuntime,
 	DEPLOY_MARKER as BRIDGE_DEPLOY_MARKER,
 	LAUNCHER_KEYS as BRIDGE_LAUNCHER_KEYS,
 	botDeploymentStateSchema,
 	deploymentLine as bridgeDeploymentLine,
+	createBotReadiness,
 	DEPLOYMENT_ID_PATTERN,
 	DEPLOYMENT_LINE,
+	DEPLOYMENT_STATE_FILE,
 	DETECT_TABLE,
 	detect,
 	detectWantedFiles,
@@ -38,9 +41,13 @@ import {
 	renderDetectTable,
 	SNAPSHOT_ID_PATTERN,
 } from "@serverkgg/bridge/bot";
+import { BridgeCrashCause, BridgeCrashPhase, BridgeEventName } from "@serverkgg/bridge/protocol";
 import {
 	BUILT_IN_TABLE,
 	botEnvironment,
+	buildCommand,
+	buildEnvironment,
+	CACHE_MANIFEST,
 	cleanSnapshots,
 	commandWords,
 	DEFAULT_STATE_DIR,
@@ -51,6 +58,7 @@ import {
 	detectManager,
 	detectStart,
 	doomedTags,
+	ensureCacheManifest,
 	failureDetail,
 	gitArgv,
 	gitEnvironment,
@@ -58,6 +66,7 @@ import {
 	HISTORY_KEEP,
 	hasShellOperator,
 	ID_PATTERN,
+	installArgv,
 	REPO_BRANCH_PATTERN as LAUNCHER_BRANCH_PATTERN,
 	LAUNCHER_KEYS,
 	REPO_REF_PATTERN as LAUNCHER_REF_PATTERN,
@@ -68,6 +77,8 @@ import {
 	loadDetectTable,
 	NODE_OPTIONS_KEY,
 	newestFirst,
+	nodeRequirementOf,
+	OUT_OF_MEMORY_DETAIL,
 	Outcome,
 	occupiedEntries,
 	parseMarker,
@@ -81,11 +92,16 @@ import {
 	resumeStateOf,
 	SNAPSHOT_STALE_MS,
 	SNAPSHOTS_DIR,
+	Stage,
 	serverkJsonOf,
 	shellCommand,
+	stageFailure,
 	startCandidates,
+	startEnvironment,
+	startRetryOf,
 	syncDue,
 	tableOf,
+	toolEnvironment,
 } from "../image/launcher.mjs";
 import { READY_LINE as READY_PATTERN } from "./lifecycle";
 import { LAUNCHER_NODE_OPTIONS, STATE_DIR } from "./shared";
@@ -145,7 +161,19 @@ describe("the detection table", () => {
 		expect(JSON.stringify(tableOf(readFileSync(TABLE_FILE, "utf8")))).toBe(JSON.stringify(BUILT_IN_TABLE));
 	});
 
-	it("falls back to the built-in table when the file is missing or broken", () => {
+	it("falls back to the built-in table when the file is missing, broken or a version behind", () => {
+		const nodeWith = (node: Record<string, unknown>) => {
+			return tableOf(
+				JSON.stringify({
+					...DETECT_TABLE,
+					node: {
+						...DETECT_TABLE.node,
+						...node,
+					},
+				}),
+			);
+		};
+
 		expect(
 			loadDetectTable({
 				SERVERK_DETECT_TABLE: join(ROOT, "no-such-table.json"),
@@ -156,9 +184,56 @@ describe("the detection table", () => {
 			tableOf(
 				JSON.stringify({
 					...DETECT_TABLE,
-					version: 2,
+					version: 1,
 				}),
 			),
+		).toBeNull();
+		expect(
+			tableOf(
+				JSON.stringify({
+					...DETECT_TABLE,
+					node: null,
+				}),
+			),
+		).toBeNull();
+		expect(
+			nodeWith({
+				runCommands: {
+					...DETECT_TABLE.node.runCommands,
+					bun: [],
+				},
+			}),
+		).toBeNull();
+		expect(
+			nodeWith({
+				installCommands: {
+					locked: DETECT_TABLE.node.installCommands.locked,
+				},
+			}),
+		).toBeNull();
+		expect(
+			nodeWith({
+				lockfiles: [
+					{
+						file: "yarn.lock",
+					},
+				],
+			}),
+		).toBeNull();
+		expect(
+			nodeWith({
+				versionFiles: [
+					{
+						file: "Pipfile",
+						key: "python_version(",
+					},
+				],
+			}),
+		).toBeNull();
+		expect(
+			nodeWith({
+				enginesKey: null,
+			}),
 		).toBeNull();
 	});
 });
@@ -425,20 +500,29 @@ describe("starting the templates", () => {
 			"discord-node",
 			"telegram-node",
 		]) {
-			expect(existsSync(join(TEMPLATES, name, "package-lock.json"))).toBe(true);
-		}
+			const dir = join(TEMPLATES, name);
+			const plan = detectManager(
+				new Set(
+					readdirSync(dir).filter((file) =>
+						[
+							"package.json",
+							"package-lock.json",
+						].includes(file),
+					),
+				),
+				JSON.parse(readFileSync(join(dir, "package.json"), "utf8")),
+			);
 
-		expect(
-			detectManager(
-				new Set([
-					"package.json",
-					"package-lock.json",
-				]),
-			),
-		).toEqual({
-			manager: "npm",
-			lockfile: "package-lock.json",
-		});
+			expect(plan).toEqual({
+				manager: "npm",
+				locked: true,
+				lockfile: "package-lock.json",
+			});
+			expect(installArgv(plan)).toEqual([
+				"npm",
+				"ci",
+			]);
+		}
 	});
 });
 
@@ -532,7 +616,46 @@ describe("detecting how to start a bot", () => {
 		]);
 	});
 
-	it("falls back to main, then the usual entry files, then the Procfile", () => {
+	it("takes the Procfile's worker or bot line before the start script", () => {
+		const packageJson = {
+			scripts: {
+				start: "node index.js",
+			},
+		};
+		const files = new Set([
+			"index.js",
+		]);
+
+		expect(
+			detectStart(files, packageJson, {
+				procfile: "web: node web.js\nbot: node bot.js",
+			}),
+		).toEqual({
+			source: "procfile",
+			argv: [
+				"sh",
+				"-c",
+				"exec node bot.js",
+			],
+		});
+		expect(
+			detectStart(files, packageJson, {
+				procfile: "web: node web.js",
+			})?.source,
+		).toBe("start-script");
+		expect(
+			detectStart(files, packageJson, {
+				serverkJson: serverkJsonOf(
+					JSON.stringify({
+						start: "node dist/main.js",
+					}),
+				),
+				procfile: "bot: node bot.js",
+			})?.source,
+		).toBe("serverk-json");
+	});
+
+	it("falls back to main, then the usual entry files", () => {
 		expect(
 			detectStart(
 				new Set([
@@ -575,6 +698,21 @@ const SERVERK_JSON_SAMPLES = [
 	JSON.stringify({
 		start: " node dist/bot.js ",
 		install: "npm ci --omit=dev",
+		build: " npm run compile ",
+	}),
+	JSON.stringify({
+		build: "",
+	}),
+	JSON.stringify({
+		build: [
+			"tsc",
+		],
+	}),
+	JSON.stringify({
+		build: "tsc\nnode dist/bot.js",
+	}),
+	JSON.stringify({
+		build: "x".repeat(1025),
 	}),
 	JSON.stringify({
 		runtime: "node",
@@ -668,6 +806,7 @@ const kitCommands = (raw: string) => {
 		? {
 				start: parsed.start,
 				install: parsed.install,
+				build: parsed.build,
 			}
 		: null;
 };
@@ -854,7 +993,88 @@ describe("the git environment", () => {
 	});
 });
 
+describe("retrying a deployment that failed at the start", () => {
+	const failed = {
+		deployment: "dep_1",
+		source: "git",
+		commit: "0123456789abcdef0123456789abcdef01234567",
+		outcome: Outcome.Failed,
+		stage: Stage.Start,
+	};
+
+	it("claims it only while the code on disk is still that deployment's own", () => {
+		const request = {
+			deploying: false,
+		};
+
+		expect(
+			startRetryOf(request, failed, {
+				source: "git",
+				commit: failed.commit,
+			}),
+		).toEqual(failed);
+		expect(
+			startRetryOf(request, failed, {
+				source: "git",
+				commit: "fedcba9876543210fedcba9876543210fedcba98",
+			}),
+		).toBeNull();
+		expect(
+			startRetryOf(
+				{
+					deploying: true,
+				},
+				failed,
+				{
+					source: "git",
+					commit: failed.commit,
+				},
+			),
+		).toBeNull();
+		expect(
+			startRetryOf(
+				request,
+				{
+					...failed,
+					stage: Stage.Install,
+				},
+				{
+					source: "git",
+					commit: failed.commit,
+				},
+			),
+		).toBeNull();
+	});
+});
+
 describe("recording why a command failed", () => {
+	it("names an install or build the memory limit killed out-of-memory, the cause the bridge names", () => {
+		expect(OUT_OF_MEMORY_DETAIL).toBe(BridgeCrashCause.OutOfMemory);
+
+		for (const stage of [
+			Stage.Install,
+			Stage.Build,
+		]) {
+			const failure = stageFailure(stage, "hint", {
+				code: 137,
+				killed: true,
+				last: "➤ YN0000: ┌ Fetch step",
+			});
+
+			expect(failure.stage).toBe(stage);
+			expect(failure.detail).toBe(OUT_OF_MEMORY_DETAIL);
+			expect(failure.arabic).not.toBe("hint");
+		}
+
+		expect(
+			stageFailure(Stage.Build, "hint", {
+				code: 2,
+				killed: false,
+				last: "cannot find module discord.js",
+			}).detail,
+		).toBe("cannot find module discord.js");
+	});
+
 	it("names npm's error code and reason, never the path of its debug log", () => {
 		expect(failureDetail(NPM_404_TRANSCRIPT)).toBe(NPM_404_DETAIL);
 	});
@@ -1011,27 +1231,457 @@ describe("keeping the history small", () => {
 	});
 });
 
+const managerOf = (files: string[], packageJson: Record<string, unknown> | null = {}) => {
+	return detectManager(
+		new Set([
+			"package.json",
+			...files,
+		]),
+		packageJson,
+	);
+};
+
+const BUILD_SCRIPT = {
+	scripts: {
+		build: "tsc",
+	},
+};
+
 describe("installing dependencies", () => {
-	it("picks the package manager from the lockfile and npm install without one", () => {
+	it("reads the packageManager field before any lockfile, yarn 2 and later as Yarn Berry", () => {
 		expect(
-			detectManager(
-				new Set([
-					"package.json",
-					"pnpm-lock.yaml",
-				]),
-			)?.manager,
-		).toBe("pnpm");
-		expect(
-			detectManager(
-				new Set([
-					"package.json",
-				]),
+			managerOf(
+				[
+					"package-lock.json",
+				],
+				{
+					packageManager: "pnpm@9.12.0",
+				},
 			),
 		).toEqual({
-			manager: "npm-install",
+			manager: "pnpm",
+			locked: false,
 			lockfile: null,
 		});
-		expect(detectManager(new Set())).toBeNull();
+		expect(
+			managerOf(
+				[
+					"pnpm-lock.yaml",
+				],
+				{
+					packageManager: " pnpm@9.12.0+sha512.abc ",
+				},
+			),
+		).toEqual({
+			manager: "pnpm",
+			locked: true,
+			lockfile: "pnpm-lock.yaml",
+		});
+		expect(
+			managerOf(
+				[
+					"yarn.lock",
+				],
+				{
+					packageManager: "yarn@1.22.22",
+				},
+			),
+		).toEqual({
+			manager: "yarn",
+			locked: true,
+			lockfile: "yarn.lock",
+		});
+		expect(
+			managerOf(
+				[
+					"yarn.lock",
+				],
+				{
+					packageManager: "yarn@4.5.0",
+				},
+			),
+		).toEqual({
+			manager: "yarn-berry",
+			locked: true,
+			lockfile: "yarn.lock",
+		});
+		expect(
+			managerOf(
+				[
+					"bun.lockb",
+				],
+				{
+					packageManager: "bun@1.1.38",
+				},
+			),
+		).toEqual({
+			manager: "bun",
+			locked: true,
+			lockfile: "bun.lockb",
+		});
+		expect(
+			managerOf(
+				[
+					"npm-shrinkwrap.json",
+				],
+				{
+					packageManager: "npm@10.9.0",
+				},
+			),
+		).toEqual({
+			manager: "npm",
+			locked: true,
+			lockfile: "npm-shrinkwrap.json",
+		});
+		expect(
+			managerOf(
+				[
+					"pnpm-lock.yaml",
+				],
+				{
+					packageManager: "deno@2.0.0",
+				},
+			)?.manager,
+		).toBe("pnpm");
+	});
+
+	it("takes the pnpm, bun and yarn lockfiles before npm's, and yarn.lock beside .yarnrc.yml as Yarn Berry", () => {
+		expect(
+			managerOf([
+				"package-lock.json",
+				"pnpm-lock.yaml",
+			]),
+		).toEqual({
+			manager: "pnpm",
+			locked: true,
+			lockfile: "pnpm-lock.yaml",
+		});
+		expect(
+			managerOf([
+				"package-lock.json",
+				"bun.lock",
+			]),
+		).toEqual({
+			manager: "bun",
+			locked: true,
+			lockfile: "bun.lock",
+		});
+		expect(
+			managerOf([
+				"bun.lockb",
+			]),
+		).toEqual({
+			manager: "bun",
+			locked: true,
+			lockfile: "bun.lockb",
+		});
+		expect(
+			managerOf([
+				"yarn.lock",
+				"bun.lock",
+			])?.manager,
+		).toBe("bun");
+		expect(
+			managerOf([
+				"yarn.lock",
+			]),
+		).toEqual({
+			manager: "yarn",
+			locked: true,
+			lockfile: "yarn.lock",
+		});
+		expect(
+			managerOf([
+				"yarn.lock",
+				".yarnrc.yml",
+			]),
+		).toEqual({
+			manager: "yarn-berry",
+			locked: true,
+			lockfile: "yarn.lock",
+		});
+	});
+
+	it("falls back to .yarnrc.yml, then the engines managers, then npm, locked only by npm's own lockfile", () => {
+		expect(
+			managerOf([
+				".yarnrc.yml",
+				"package-lock.json",
+			]),
+		).toEqual({
+			manager: "yarn-berry",
+			locked: false,
+			lockfile: null,
+		});
+		expect(
+			managerOf([], {
+				engines: {
+					node: ">=20",
+					yarn: "1.x",
+					bun: ">=1",
+				},
+			}),
+		).toEqual({
+			manager: "bun",
+			locked: false,
+			lockfile: null,
+		});
+		expect(
+			managerOf(
+				[
+					"package-lock.json",
+				],
+				{
+					engines: {
+						pnpm: ">=9",
+					},
+				},
+			),
+		).toEqual({
+			manager: "pnpm",
+			locked: false,
+			lockfile: null,
+		});
+		expect(
+			managerOf([
+				"package-lock.json",
+			]),
+		).toEqual({
+			manager: "npm",
+			locked: true,
+			lockfile: "package-lock.json",
+		});
+		expect(managerOf([], null)).toEqual({
+			manager: "npm",
+			locked: false,
+			lockfile: null,
+		});
+		expect(
+			detectManager(
+				new Set([
+					"package-lock.json",
+				]),
+				{},
+			),
+		).toBeNull();
+	});
+
+	it("installs frozen from a lockfile and plainly without one", () => {
+		const cases: [
+			string[],
+			Record<string, unknown>,
+			string,
+		][] = [
+			[
+				[
+					"package-lock.json",
+				],
+				{},
+				"npm ci",
+			],
+			[
+				[],
+				{},
+				"npm install",
+			],
+			[
+				[
+					"pnpm-lock.yaml",
+				],
+				{},
+				"corepack pnpm install --frozen-lockfile",
+			],
+			[
+				[],
+				{
+					engines: {
+						pnpm: ">=9",
+					},
+				},
+				"corepack pnpm install",
+			],
+			[
+				[
+					"yarn.lock",
+				],
+				{},
+				"corepack yarn install --frozen-lockfile",
+			],
+			[
+				[
+					"yarn.lock",
+					".yarnrc.yml",
+				],
+				{},
+				"corepack yarn install --immutable",
+			],
+			[
+				[
+					".yarnrc.yml",
+				],
+				{},
+				"corepack yarn install --no-immutable",
+			],
+			[
+				[
+					"bun.lock",
+				],
+				{},
+				"bun install --frozen-lockfile",
+			],
+			[
+				[],
+				{
+					packageManager: "bun@1.1.38",
+				},
+				"bun install",
+			],
+		];
+
+		for (const [files, packageJson, command] of cases) {
+			const plan = managerOf(files, packageJson);
+
+			expect(plan ? installArgv(plan).join(" ") : null, command).toBe(command);
+		}
+	});
+
+	it("decides the install, the lock and the build exactly as the bridge's inspection does", () => {
+		const samples: [
+			string[],
+			Record<string, unknown>,
+		][] = [
+			[
+				[],
+				{},
+			],
+			[
+				[
+					"package-lock.json",
+				],
+				BUILD_SCRIPT,
+			],
+			[
+				[
+					"npm-shrinkwrap.json",
+				],
+				{},
+			],
+			[
+				[
+					"pnpm-lock.yaml",
+					"package-lock.json",
+				],
+				BUILD_SCRIPT,
+			],
+			[
+				[
+					"bun.lock",
+				],
+				BUILD_SCRIPT,
+			],
+			[
+				[
+					"bun.lockb",
+				],
+				{},
+			],
+			[
+				[
+					"yarn.lock",
+				],
+				BUILD_SCRIPT,
+			],
+			[
+				[
+					"yarn.lock",
+					".yarnrc.yml",
+				],
+				BUILD_SCRIPT,
+			],
+			[
+				[
+					".yarnrc.yml",
+				],
+				{},
+			],
+			[
+				[],
+				{
+					...BUILD_SCRIPT,
+					engines: {
+						yarn: "1.x",
+					},
+				},
+			],
+			[
+				[
+					"package-lock.json",
+				],
+				{
+					engines: {
+						pnpm: ">=9",
+					},
+				},
+			],
+			[
+				[
+					"pnpm-lock.yaml",
+				],
+				{
+					...BUILD_SCRIPT,
+					packageManager: "yarn@4.5.0",
+				},
+			],
+			[
+				[
+					"yarn.lock",
+				],
+				{
+					packageManager: "yarn@1.22.22",
+				},
+			],
+			[
+				[],
+				{
+					...BUILD_SCRIPT,
+					packageManager: "bun@1.1.38",
+				},
+			],
+			[
+				[
+					"package-lock.json",
+				],
+				{
+					packageManager: "npm@10.9.0",
+					scripts: {
+						build: "  ",
+					},
+				},
+			],
+		];
+
+		for (const [files, packageJson] of samples) {
+			const paths = [
+				"package.json",
+				...files,
+			];
+			const result = detect({
+				files: paths.map((path) => ({
+					path,
+				})),
+				contents: {
+					"package.json": JSON.stringify(packageJson),
+				},
+			});
+			const plan = managerOf(files, packageJson);
+			const label = `${paths.join(", ")} ${JSON.stringify(packageJson)}`;
+
+			expect(plan ? installArgv(plan).join(" ") : null, label).toBe(result.install?.command ?? null);
+			expect(!plan?.locked, label).toBe(result.warnings.includes(BotInspectWarning.NoLockfile));
+			expect(buildCommand(null, packageJson, plan?.manager ?? null)?.command ?? null, label).toBe(
+				result.build?.command ?? null,
+			);
+		}
 	});
 
 	it("skips an install whose hash matches and whose node_modules is where it was left", () => {
@@ -1103,6 +1753,337 @@ describe("installing dependencies", () => {
 		).toEqual([
 			"index.js",
 		]);
+	});
+});
+
+describe("building a bot", () => {
+	it("runs the build script with the package manager's own run command", () => {
+		const runs = {
+			npm: "npm run build",
+			pnpm: "corepack pnpm run build",
+			yarn: "corepack yarn run build",
+			"yarn-berry": "corepack yarn run build",
+			bun: "bun run build",
+		};
+
+		for (const [manager, command] of Object.entries(runs)) {
+			expect(buildCommand(null, BUILD_SCRIPT, manager), manager).toEqual({
+				command,
+				argv: command.split(" "),
+			});
+		}
+
+		expect(
+			buildCommand(
+				null,
+				{
+					scripts: {
+						build: " ",
+					},
+				},
+				"npm",
+			),
+		).toBeNull();
+		expect(
+			buildCommand(
+				null,
+				{
+					scripts: {
+						start: "node index.js",
+					},
+				},
+				"npm",
+			),
+		).toBeNull();
+		expect(buildCommand(null, null, null)).toBeNull();
+	});
+
+	it("runs serverk.json's build command over the build script", () => {
+		expect(
+			buildCommand(
+				serverkJsonOf(
+					JSON.stringify({
+						build: "npm run compile && npm run bundle",
+					}),
+				),
+				BUILD_SCRIPT,
+				"pnpm",
+			),
+		).toEqual({
+			command: "npm run compile && npm run bundle",
+			argv: [
+				"sh",
+				"-c",
+				"npm run compile && npm run bundle",
+			],
+		});
+		expect(
+			buildCommand(
+				serverkJsonOf(
+					JSON.stringify({
+						build: "tsc",
+					}),
+				),
+				null,
+				null,
+			),
+		).toEqual({
+			command: "tsc",
+			argv: [
+				"sh",
+				"-c",
+				"exec tsc",
+			],
+		});
+	});
+});
+
+describe("the install, build and bot environments", () => {
+	const ENV = {
+		PATH: "/usr/bin",
+		DISCORD_TOKEN: "token",
+		SERVERK_GIT_TOKEN: "ghs_installation",
+		SERVERK_REPO_URL: REMOTE,
+		SERVERK_INSTALL_COMMAND: "npm i",
+		SERVERK_NODE_OPTIONS: "--enable-source-maps",
+		SERVERK_LAUNCH_RESUME: "{}",
+	};
+
+	it("builds with node_modules/.bin on PATH, CI set, the caches in the state folder and no launcher key", () => {
+		const environment: Record<string, unknown> = buildEnvironment(ENV, "/state", "/app/bot");
+
+		expect(environment).toMatchObject({
+			PATH: "/app/bot/node_modules/.bin:/usr/bin",
+			DISCORD_TOKEN: "token",
+			CI: "true",
+			BUN_INSTALL_CACHE_DIR: "/state/cache/bun",
+			npm_config_cache: "/state/cache/npm",
+			COREPACK_HOME: "/state/cache/corepack",
+		});
+		expect(LAUNCHER_KEYS.filter((key) => key in environment)).toEqual([]);
+		expect(toolEnvironment(ENV, "/state")).toMatchObject({
+			CI: "true",
+			BUN_INSTALL_CACHE_DIR: "/state/cache/bun",
+		});
+	});
+
+	it("writes the CommonJS manifest over the tool caches when missing and leaves an existing one alone", () => {
+		const state = mkdtempSync(join(tmpdir(), "bot-node-cache-"));
+		const manifest = join(state, "cache", "package.json");
+
+		try {
+			ensureCacheManifest(state);
+
+			expect(readFileSync(manifest, "utf8")).toBe(CACHE_MANIFEST);
+			expect(JSON.parse(CACHE_MANIFEST)).toEqual({
+				type: "commonjs",
+			});
+
+			writeFileSync(manifest, '{"type": "commonjs", "kept": true}');
+			ensureCacheManifest(state);
+
+			expect(readFileSync(manifest, "utf8")).toBe('{"type": "commonjs", "kept": true}');
+		} finally {
+			rmSync(state, {
+				force: true,
+				recursive: true,
+			});
+		}
+	});
+
+	it("keeps corepack and bun under the cache folder whatever the environment says", () => {
+		expect(
+			toolEnvironment(
+				{
+					COREPACK_HOME: "/home/container/.corepack",
+					BUN_INSTALL_CACHE_DIR: "/home/container/.bun",
+				},
+				"/state",
+			),
+		).toMatchObject({
+			COREPACK_HOME: "/state/cache/corepack",
+			BUN_INSTALL_CACHE_DIR: "/state/cache/bun",
+		});
+	});
+
+	it("starts the bot with its own NODE_OPTIONS and none of CI, the tool caches or the launcher keys", () => {
+		const environment: Record<string, unknown> = startEnvironment(ENV, "/app/bot");
+
+		expect(environment).toEqual({
+			PATH: "/app/bot/node_modules/.bin:/usr/bin",
+			DISCORD_TOKEN: "token",
+			NODE_OPTIONS: "--enable-source-maps",
+		});
+	});
+});
+
+describe("reading the Node version the code asks for", () => {
+	const reader = (files: Record<string, string>) => {
+		return (file: string) => files[file] ?? null;
+	};
+
+	it("takes engines.node before the version files, a range as its lowest major", () => {
+		const nvmrc = reader({
+			".nvmrc": "20\n",
+		});
+		const engines = (node: string) => {
+			return {
+				engines: {
+					node,
+				},
+			};
+		};
+
+		expect(nodeRequirementOf(engines(">=18"), nvmrc, 24)).toEqual({
+			version: "18",
+			unmet: false,
+		});
+		expect(nodeRequirementOf(engines("^18.17.0 || ^20"), nvmrc, 24)).toEqual({
+			version: "18",
+			unmet: true,
+		});
+		expect(nodeRequirementOf(engines("18.x - 22"), nvmrc, 22)).toEqual({
+			version: "18",
+			unmet: false,
+		});
+		expect(nodeRequirementOf(engines("<20"), nvmrc, 24)).toEqual({
+			version: "19",
+			unmet: true,
+		});
+		expect(nodeRequirementOf(engines("lts/*"), nvmrc, 24)).toEqual({
+			version: "20",
+			unmet: true,
+		});
+		expect(nodeRequirementOf(engines(" "), reader({}), 24)).toBeNull();
+	});
+
+	it("reads .nvmrc, .node-version and the nodejs line of .tool-versions, in that order", () => {
+		expect(
+			nodeRequirementOf(
+				{},
+				reader({
+					".nvmrc": "v22.11.0\n",
+					".node-version": "20",
+				}),
+				22,
+			),
+		).toEqual({
+			version: "22",
+			unmet: false,
+		});
+		expect(
+			nodeRequirementOf(
+				null,
+				reader({
+					".nvmrc": "lts/iron\n",
+					".node-version": "# pinned\n20.18.1",
+				}),
+				24,
+			),
+		).toEqual({
+			version: "20",
+			unmet: true,
+		});
+		expect(
+			nodeRequirementOf(
+				{},
+				reader({
+					".tool-versions": "python 3.12.4\nnodejs 18.20.4\n",
+				}),
+				24,
+			),
+		).toEqual({
+			version: "18",
+			unmet: true,
+		});
+		expect(
+			nodeRequirementOf(
+				{},
+				reader({
+					".tool-versions": "python 3.12.4\n",
+				}),
+				24,
+			),
+		).toBeNull();
+	});
+
+	it("agrees with the bridge's inspection on the version and when the image misses it", () => {
+		const image = Number(DETECT_TABLE.node.defaultVersion);
+		const samples: [
+			Record<string, unknown>,
+			Record<string, string>,
+		][] = [
+			[
+				{
+					engines: {
+						node: ">=22",
+					},
+				},
+				{},
+			],
+			[
+				{
+					engines: {
+						node: "^18 || ^20",
+					},
+				},
+				{
+					".nvmrc": "24",
+				},
+			],
+			[
+				{
+					engines: {
+						node: ">=20 <23",
+					},
+				},
+				{},
+			],
+			[
+				{
+					engines: {
+						node: "lts/*",
+					},
+				},
+				{
+					".node-version": "22.11.0",
+				},
+			],
+			[
+				{},
+				{
+					".nvmrc": "v24.1.0",
+				},
+			],
+			[
+				{},
+				{
+					".tool-versions": "nodejs 20.18.1",
+				},
+			],
+			[
+				{},
+				{},
+			],
+		];
+
+		for (const [packageJson, files] of samples) {
+			const contents = {
+				"package.json": JSON.stringify(packageJson),
+				...files,
+			};
+			const result = detect({
+				files: Object.keys(contents).map((path) => ({
+					path,
+				})),
+				contents,
+			});
+			const requirement = nodeRequirementOf(packageJson, reader(files), image);
+			const label = JSON.stringify(contents);
+
+			expect(requirement?.version ?? null, label).toBe(result.nodeVersion);
+			expect(requirement?.unmet ?? false, label).toBe(result.warnings.includes(BotInspectWarning.NodeVersionUnmet));
+		}
 	});
 });
 
@@ -1227,7 +2208,7 @@ describe("running the launcher", () => {
 		});
 	});
 
-	it("deploys an uploaded snapshot, dotfiles included, and announces it before the ready line", () => {
+	it("deploys an uploaded snapshot, dotfiles included, and records it without announcing it before the bot proves itself", () => {
 		place(
 			zipOf("one", {
 				"index.js": "run()",
@@ -1243,12 +2224,12 @@ describe("running the launcher", () => {
 		});
 
 		expect(code).toBe(0);
-		expect(lines.slice(-4)).toEqual([
-			"serverk: deployment dep_1 ready",
+		expect(lines.slice(-3)).toEqual([
 			"serverk: start command: sh -c exec echo the bot ran",
 			READY_LINE,
 			"the bot ran",
 		]);
+		expect(lines.some((line) => DEPLOYMENT_LINE.test(line))).toBe(false);
 		expect(readFileSync(join(app, ".env.example"), "utf8")).toBe("DISCORD_TOKEN=");
 		expect(existsSync(join(app, "lib", "old.js"))).toBe(true);
 		expect(existsSync(join(state, SNAPSHOTS_DIR, "snap_1.zip"))).toBe(false);
@@ -1257,6 +2238,7 @@ describe("running the launcher", () => {
 			source: "snapshot",
 			snapshot: "snap_1",
 			outcome: "ready",
+			settled: false,
 		});
 	});
 
@@ -1298,7 +2280,10 @@ describe("running the launcher", () => {
 		});
 
 		expect(rollback.lines).toContain("serverk: restoring snapshot snap_1");
-		expect(rollback.lines).toContain("serverk: deployment dep_3 ready");
+		expect(stamp()).toMatchObject({
+			deployment: "dep_3",
+			outcome: "ready",
+		});
 		expect(readFileSync(join(app, "lib", "old.js"), "utf8")).toBe("old");
 		expect(readFileSync(join(app, "data.db"), "utf8")).toBe("runtime");
 		expect(historyCount()).toBe(2);
@@ -1409,6 +2394,121 @@ describe("running the launcher", () => {
 
 		expect(startMode.lines.at(-1)).toBe("serverk: deployment dep_1 failed: install: nope");
 	});
+
+	it("fails a deployment whose install the memory limit killed with out-of-memory, not its last line", () => {
+		writeFileSync(join(app, "package.json"), "{}");
+
+		const { code, lines } = launch({
+			SERVERK_INSTALL_COMMAND: "echo fetching; kill -9 $$",
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		});
+
+		expect(code).toBe(1);
+		expect(lines.at(-1)).toBe("serverk: deployment dep_1 failed: install: out-of-memory");
+		expect(stamp()).toMatchObject({
+			deployment: "dep_1",
+			outcome: "failed",
+			stage: "install",
+			detail: OUT_OF_MEMORY_DETAIL,
+		});
+	});
+
+	it("a start after a boot failure reports the same deployment ready when the bot survives", async () => {
+		const emitted: {
+			event: string;
+			payload: unknown;
+		}[] = [];
+		const bridge = {
+			files: {
+				async exists(path: string) {
+					return existsSync(join(app, path));
+				},
+				async read(path: string) {
+					return readFileSync(join(app, path), "utf8");
+				},
+				async write(path: string, content: string) {
+					writeFileSync(join(app, path), content);
+				},
+			},
+			log: Object.assign(() => {}, {
+				warn: () => {},
+				error: () => {},
+			}),
+			emit(event: string, payload: unknown) {
+				emitted.push({
+					event,
+					payload,
+				});
+			},
+		} as unknown as Parameters<ReturnType<typeof createBotReadiness>["ready"]>[0];
+		const readiness = createBotReadiness();
+
+		place(
+			zipOf("one", {
+				"index.js": "run()",
+			}),
+			"snap_1",
+		);
+		readiness.launching();
+		launch({
+			SERVERK_SNAPSHOT_ID: "snap_1",
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		});
+		await readiness.ready(bridge);
+		await readiness.exit(bridge, {
+			cause: BridgeCrashCause.TokenInvalid,
+			exitCode: 1,
+			outOfMemory: false,
+			phase: BridgeCrashPhase.Booting,
+			uptimeSeconds: 2,
+			restarting: false,
+			looping: false,
+			restarts: 0,
+			lastLine: null,
+		});
+
+		expect(stamp()).toMatchObject({
+			deployment: "dep_1",
+			outcome: "failed",
+			stage: "start",
+		});
+
+		readiness.launching();
+
+		const again = launch({});
+
+		await readiness.ready(bridge);
+		await readiness.stable(bridge);
+
+		expect(again.code).toBe(0);
+		expect(again.lines.at(-1)).toBe("the bot ran");
+		expect(existsSync(join(app, DEPLOYMENT_STATE_FILE))).toBe(true);
+		expect(emitted.at(-1)).toEqual({
+			event: BridgeEventName.ServerUpdated,
+			payload: {
+				kind: "deployment",
+				deployment: "dep_1",
+				outcome: "ready",
+				commit: null,
+			},
+		});
+		expect(stamp()).toMatchObject({
+			deployment: "dep_1",
+			outcome: "ready",
+			settled: true,
+		});
+	});
+
+	it("keeps the reason of an install that exited 137 on its own, with no kill behind it", () => {
+		writeFileSync(join(app, "package.json"), "{}");
+
+		const { lines } = launch({
+			SERVERK_INSTALL_COMMAND: "echo nope >&2; exit 137",
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		});
+
+		expect(lines.at(-1)).toBe("serverk: deployment dep_1 failed: install: nope");
+	});
 	const wrappedPath = (bare: string) => {
 		const bin = join(root, "bin");
 		const real = Bun.which("git") ?? "/usr/bin/git";
@@ -1482,7 +2582,11 @@ describe("running the launcher", () => {
 		});
 
 		expect(code).toBe(0);
-		expect(lines).toContain(`serverk: deployment dep_1 ready at ${remote.sha.slice(0, 12)}`);
+		expect(stamp()).toMatchObject({
+			deployment: "dep_1",
+			outcome: "ready",
+			commit: remote.sha,
+		});
 		expect(lines).toContain("serverk: start command: sh -c exec node index.js");
 		expect(lines.at(-1)).toBe(`cwd ${realpathSync(join(app, "app"))}`);
 		expect(readFileSync(join(app, "README.md"), "utf8")).toBe("sibling");
@@ -1626,6 +2730,274 @@ describe("running the launcher", () => {
 		expect(lines).toContain("serverk: installing dependencies: echo declared install");
 		expect(lines).toContain("serverk: start command: sh -c exec echo declared start");
 		expect(lines.at(-1)).toBe("declared start");
+	});
+
+	it("builds after the install on a deployment and skips the build on a plain restart", () => {
+		writeFileSync(join(app, "package.json"), JSON.stringify(BUILD_SCRIPT));
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				install: "echo declared install",
+				build: "echo declared build",
+			}),
+		);
+		writeFileSync(
+			join(state, DEPLOY_MARKER),
+			JSON.stringify({
+				deployment: null,
+				ref: null,
+				snapshot: null,
+				reinstall: false,
+			}),
+		);
+
+		const deployed = launch({});
+
+		expect(deployed.code).toBe(0);
+		expect(
+			deployed.lines.slice(
+				deployed.lines.indexOf("serverk: dependencies installed"),
+				deployed.lines.indexOf(READY_LINE) + 1,
+			),
+		).toEqual([
+			"serverk: dependencies installed",
+			"serverk: building: echo declared build",
+			"declared build",
+			"serverk: build finished",
+			"serverk: start command: sh -c exec echo the bot ran",
+			READY_LINE,
+		]);
+
+		const restart = launch({});
+
+		expect(restart.code).toBe(0);
+		expect(restart.lines).toContain("serverk: dependencies are up to date (custom)");
+		expect(restart.lines).toContain("serverk: no new deployment or install, skipping the build");
+		expect(restart.lines).not.toContain("declared build");
+	});
+
+	it("builds again on a restart that reinstalled, and in the start that follows an install-mode install", () => {
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				build: "echo declared build",
+			}),
+		);
+
+		const installed = launch({
+			SERVERK_INSTALL_COMMAND: "echo first install",
+		});
+
+		expect(installed.lines).toContain("serverk: installing dependencies: echo first install");
+		expect(installed.lines).toContain("declared build");
+
+		const reinstalled = launch({
+			SERVERK_INSTALL_COMMAND: "echo second install",
+		});
+
+		expect(reinstalled.lines).toContain("serverk: installing dependencies: echo second install");
+		expect(reinstalled.lines).toContain("serverk: building: echo declared build");
+		expect(
+			launch({
+				SERVERK_INSTALL_COMMAND: "echo second install",
+			}).lines,
+		).toContain("serverk: no new deployment or install, skipping the build");
+
+		const installMode = launch(
+			{
+				SERVERK_INSTALL_COMMAND: "echo third install",
+			},
+			[
+				"install",
+			],
+		);
+
+		expect(installMode.code).toBe(0);
+		expect(installMode.lines).toContain("serverk: installing dependencies: echo third install");
+		expect(
+			installMode.lines.some((line) => line.startsWith("serverk: building:") || line.includes("skipping the build")),
+		).toBe(false);
+		expect(installMode.lines).not.toContain("declared build");
+
+		const started = launch({
+			SERVERK_INSTALL_COMMAND: "echo third install",
+		});
+
+		expect(started.lines).toContain("serverk: dependencies are up to date (custom)");
+		expect(started.lines).toContain("declared build");
+	});
+
+	it("never builds after a failed install", () => {
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				install: "echo nope >&2; exit 3",
+				build: "echo declared build",
+			}),
+		);
+
+		const { code, lines } = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_i",
+		});
+
+		expect(code).toBe(1);
+		expect(lines.at(-1)).toBe("serverk: deployment dep_i failed: install: nope");
+		expect(lines.some((line) => line.startsWith("serverk: building:"))).toBe(false);
+		expect(lines).not.toContain("declared build");
+	});
+
+	it("runs the cached package manager as CommonJS under a customer package.json of type module", () => {
+		writeFileSync(
+			join(app, "package.json"),
+			JSON.stringify({
+				type: "module",
+			}),
+		);
+		mkdirSync(join(state, "cache", "corepack"), {
+			recursive: true,
+		});
+		writeFileSync(join(state, "cache", "corepack", "yarn.js"), "console.log('require is a ' + typeof require)");
+
+		const { code, lines } = launch({
+			SERVERK_INSTALL_COMMAND: `cat ${join(state, "cache", "package.json")}; echo; node ${join(state, "cache", "corepack", "yarn.js")}`,
+		});
+
+		expect(code).toBe(0);
+		expect(lines).toContain(CACHE_MANIFEST);
+		expect(lines).toContain("require is a function");
+	});
+
+	it("sets CI for the install and the build, never for the bot", () => {
+		writeFileSync(join(app, "index.js"), "console.log('bot ci ' + (process.env.CI ?? 'none'))");
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				install: "echo install ci $CI",
+				build: "echo build ci $CI",
+			}),
+		);
+
+		const { code, lines } = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_ci",
+			SERVERK_START_COMMAND: "node index.js",
+		});
+
+		expect(code).toBe(0);
+		expect(lines).toContain("install ci true");
+		expect(lines).toContain("build ci true");
+		expect(lines.at(-1)).toBe("bot ci none");
+	});
+
+	it("reinstalls when only the install command changes, from unlocked to locked", () => {
+		const bin = join(root, "corepack-bin");
+
+		mkdirSync(bin, {
+			recursive: true,
+		});
+		writeFileSync(join(bin, "corepack"), '#!/bin/sh\necho "corepack ran $*"\n', {
+			mode: 0o755,
+		});
+		writeFileSync(join(app, "package.json"), '{"name": "berry"}');
+		writeFileSync(join(app, ".yarnrc.yml"), "nodeLinker: node-modules\n");
+
+		const install = () => {
+			return launch({
+				PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+			}).lines;
+		};
+
+		expect(install()).toContain("serverk: installing dependencies: corepack yarn install --no-immutable");
+		expect(install()).toContain("serverk: dependencies are up to date (yarn-berry)");
+
+		writeFileSync(join(app, "yarn.lock"), "");
+
+		expect(install()).toContain("serverk: installing dependencies: corepack yarn install --immutable");
+		expect(install()).toContain("serverk: dependencies are up to date (yarn-berry)");
+	});
+
+	it("fails the build stage with the build's reason and the hint, and records the stage", () => {
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				build: "echo cannot find module discord.js >&2; exit 2",
+			}),
+		);
+
+		const { code, lines } = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_b",
+		});
+
+		expect(code).toBe(1);
+		expect(lines).toContain("serverk: building: echo cannot find module discord.js >&2; exit 2");
+		expect(lines.some((line) => line.includes("تعذّر بناء كود بوتك"))).toBe(true);
+		expect(lines.at(-1)).toBe("serverk: deployment dep_b failed: build: cannot find module discord.js");
+		expect(DEPLOYMENT_LINE.exec(lines.at(-1) ?? "")?.groups?.stage).toBe("build");
+		expect(JSON.parse(readFileSync(join(state, DEPLOYMENT_STAMP), "utf8"))).toMatchObject({
+			deployment: "dep_b",
+			outcome: "failed",
+			stage: "build",
+			detail: "cannot find module discord.js",
+		});
+	});
+
+	it("says when the code asks for a Node version this runtime does not have, and carries on", () => {
+		const major = Bun.spawnSync(
+			[
+				"node",
+				"-p",
+				"process.versions.node.split('.')[0]",
+			],
+			{
+				stdout: "pipe",
+			},
+		)
+			.stdout.toString()
+			.trim();
+		const asked = (packageJson: Record<string, unknown>, nvmrc: string | null) => {
+			writeFileSync(join(app, "package.json"), JSON.stringify(packageJson));
+			rmSync(join(app, ".nvmrc"), {
+				force: true,
+			});
+
+			if (nvmrc !== null) {
+				writeFileSync(join(app, ".nvmrc"), nvmrc);
+			}
+
+			const { code, lines } = launch({
+				SERVERK_INSTALL_COMMAND: "echo custom install",
+			});
+
+			expect(code).toBe(0);
+			expect(lines.at(-1)).toBe("the bot ran");
+
+			return lines.filter((line) => line.startsWith("serverk: the code asks for Node"));
+		};
+
+		expect(
+			asked(
+				{
+					engines: {
+						node: "^16",
+					},
+				},
+				"22",
+			),
+		).toEqual([
+			`serverk: the code asks for Node 16, this runtime is Node ${major}`,
+		]);
+		expect(asked({}, "v16.20.2\n")).toEqual([
+			`serverk: the code asks for Node 16, this runtime is Node ${major}`,
+		]);
+		expect(
+			asked(
+				{
+					engines: {
+						node: ">=16",
+					},
+				},
+				"16",
+			),
+		).toEqual([]);
 	});
 
 	it("applies the customer's NODE_OPTIONS to the bot only, never to the launcher or the install", () => {
@@ -1856,7 +3228,11 @@ describe("running the launcher", () => {
 
 		expect(code).toBe(0);
 		expect(lines).toContain("parent-token-0");
-		expect(lines).toContain(`serverk: deployment dep_1 ready at ${remote.sha.slice(0, 12)}`);
+		expect(stamp()).toMatchObject({
+			deployment: "dep_1",
+			outcome: "ready",
+			commit: remote.sha,
+		});
 		expect(lines.at(-1)).toBe("bot none");
 	});
 
@@ -1879,6 +3255,10 @@ describe("running the launcher", () => {
 				"\tinstall)",
 				"\t\techo '{\"generated\": true}' > package-lock.json",
 				'\t\techo "npm install ran"',
+				"\t\texit 0",
+				"\t\t;;",
+				"\trun)",
+				'\t\techo "npm run $2 ran"',
 				"\t\texit 0",
 				"\t\t;;",
 				"esac",
@@ -1953,7 +3333,10 @@ describe("running the launcher", () => {
 
 		expect(second.code).toBe(0);
 		expect(second.lines).toContain("serverk: installing dependencies: npm install");
-		expect(second.lines).toContain("serverk: deployment dep_snap_b ready");
+		expect(stamp()).toMatchObject({
+			deployment: "dep_snap_b",
+			outcome: "ready",
+		});
 		expect(second.lines.at(-1)).toBe("the bot ran");
 	});
 
@@ -1972,7 +3355,10 @@ describe("running the launcher", () => {
 
 		expect(second.code).toBe(0);
 		expect(second.lines).toContain("serverk: installing dependencies: npm install");
-		expect(second.lines).toContain("serverk: deployment dep_snap_b ready");
+		expect(stamp()).toMatchObject({
+			deployment: "dep_snap_b",
+			outcome: "ready",
+		});
 		expect(second.lines.at(-1)).toBe("the bot ran");
 
 		const restart = launch({
@@ -1982,7 +3368,7 @@ describe("running the launcher", () => {
 		});
 
 		expect(restart.code).toBe(0);
-		expect(restart.lines).toContain("serverk: dependencies are up to date (npm-install)");
+		expect(restart.lines).toContain("serverk: dependencies are up to date (npm)");
 	});
 
 	it("installs a repository with npm install after a snapshot whose install generated a lockfile", () => {
@@ -2007,7 +3393,27 @@ describe("running the launcher", () => {
 
 		expect(switched.code).toBe(0);
 		expect(switched.lines).toContain("serverk: installing dependencies: npm install");
-		expect(switched.lines).toContain(`serverk: deployment dep_git ready at ${remote.sha.slice(0, 12)}`);
+		expect(stamp()).toMatchObject({
+			deployment: "dep_git",
+			outcome: "ready",
+			commit: remote.sha,
+		});
+	});
+
+	it("builds a snapshot with npm run build after npm ci", () => {
+		const built = deployWithNpm("snap_a", {
+			"package.json": JSON.stringify(BUILD_SCRIPT),
+			"package-lock.json": '{"from-source": true}',
+		});
+
+		expect(built.code).toBe(0);
+		expect(built.lines).toContain("serverk: installing dependencies: npm ci");
+		expect(built.lines).toContain("serverk: building: npm run build");
+		expect(built.lines).toContain("npm run build ran");
+		expect(stamp()).toMatchObject({
+			deployment: "dep_snap_a",
+			outcome: "ready",
+		});
 	});
 
 	it("keeps only the current snapshot and the ten before it, and drops stale zips", () => {
