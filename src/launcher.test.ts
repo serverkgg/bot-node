@@ -3602,7 +3602,7 @@ describe("running the launcher", () => {
 		expect(failed.lines.at(-1)).toStartWith(
 			"serverk: deployment dep_1 failed: sync: commit ffffffffffff is not in the repository",
 		);
-		expect(failed.lines.some((line) => line.includes("الكوميت المطلوب نشره غير موجود"))).toBe(true);
+		expect(failed.lines.some((line) => line.includes("الـ commit المطلوب نشره غير موجود"))).toBe(true);
 	});
 
 	it("refuses a repository that tracks .serverk instead of letting it overwrite the stamps", () => {

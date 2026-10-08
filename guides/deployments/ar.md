@@ -6,7 +6,8 @@
 
 1. نسحب الـ commit من الريبو، أو نفك الكود الذي رفعته.
 2. نثبّت المكتبات إذا تغيّرت.
-3. نشغّل بوتك ونطبع سطر النجاح:
+3. نشغّل سكربت `build` إذا كان في `package.json`، في كل نشر.
+4. نشغّل بوتك ونطبع سطر النجاح:
 
 ```txt
 serverk: deployment dep_a1b2c3d4 ready at 3f2a9c1b7d10
@@ -22,7 +23,7 @@ serverk: deployment dep_a1b2c3d4 ready at 3f2a9c1b7d10
 serverk: deployment dep_a1b2c3d4 failed: install: npm error code ERESOLVE
 ```
 
-الخطوة واحدة من `sync` (سحب الكود) أو `snapshot` (فك الكود المرفوع) أو `install` (المكتبات) أو `start` (التشغيل). أصلح السبب وانشر من جديد، أو ارجع إلى آخر نشر كان شغّالًا.
+الخطوة واحدة من `sync` (سحب الكود) أو `snapshot` (فك الكود المرفوع) أو `install` (المكتبات) أو `build` (البناء) أو `start` (التشغيل). أصلح السبب وانشر من جديد، أو ارجع إلى آخر نشر كان شغّالًا.
 
 @[open](console)
 
