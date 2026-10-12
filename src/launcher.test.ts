@@ -26,9 +26,11 @@ import {
 	LAUNCHER_KEYS as BRIDGE_LAUNCHER_KEYS,
 	botDeploymentStateSchema,
 	deploymentLine as bridgeDeploymentLine,
+	deploymentStageLine as bridgeStageLine,
 	createBotReadiness,
 	DEPLOYMENT_ID_PATTERN,
 	DEPLOYMENT_LINE,
+	DEPLOYMENT_STAGE_LINE,
 	DEPLOYMENT_STATE_FILE,
 	DETECT_TABLE,
 	detect,
@@ -2294,6 +2296,10 @@ describe("running the launcher", () => {
 		return Object.keys(readSourceFiles(state) ?? {});
 	};
 
+	const stagesOf = (lines: string[]) => {
+		return lines.filter((line) => DEPLOYMENT_STAGE_LINE.test(line));
+	};
+
 	const loseHistory = () => {
 		for (const dir of [
 			HISTORY_DIR,
@@ -2434,6 +2440,58 @@ describe("running the launcher", () => {
 		expect(historyCount()).toBe(2);
 	});
 
+	it("prints each stage of a deployment once, the way the bridge reads it, before the bot starts", () => {
+		place(
+			zipOf("one", {
+				"index.js": "run()",
+			}),
+			"snap_1",
+		);
+
+		const { code, lines } = launch({
+			SERVERK_SNAPSHOT_ID: "snap_1",
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		});
+
+		expect(code).toBe(0);
+		expect(stagesOf(lines)).toEqual([
+			bridgeStageLine("dep_1", BotDeploymentStage.Snapshot),
+			bridgeStageLine("dep_1", BotDeploymentStage.Install),
+			bridgeStageLine("dep_1", BotDeploymentStage.Start),
+		]);
+		expect(lines.indexOf(bridgeStageLine("dep_1", BotDeploymentStage.Start))).toBeLessThan(lines.indexOf(READY_LINE));
+	});
+
+	it("prints the build stage only for a bot that builds, and no stage on a restart with nothing to deploy", () => {
+		writeFileSync(join(app, "index.js"), "run()");
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				install: "echo declared install",
+				build: "echo declared build",
+			}),
+		);
+
+		const deployed = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+		});
+
+		expect(deployed.code).toBe(0);
+		expect(stagesOf(deployed.lines)).toEqual([
+			bridgeStageLine("dep_2", BotDeploymentStage.Sync),
+			bridgeStageLine("dep_2", BotDeploymentStage.Install),
+			bridgeStageLine("dep_2", BotDeploymentStage.Build),
+			bridgeStageLine("dep_2", BotDeploymentStage.Start),
+		]);
+
+		const restart = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+		});
+
+		expect(restart.code).toBe(0);
+		expect(stagesOf(restart.lines)).toEqual([]);
+	});
+
 	it("starts a deployment that already ran without announcing it again", () => {
 		place(
 			zipOf("one", {
@@ -2463,6 +2521,9 @@ describe("running the launcher", () => {
 		});
 
 		expect(code).toBe(1);
+		expect(stagesOf(lines)).toEqual([
+			bridgeStageLine("dep_9", BotDeploymentStage.Snapshot),
+		]);
 		expect(lines.at(-1)).toBe("serverk: deployment dep_9 failed: snapshot: snapshot snap_missing is not on this bot");
 		expect(DEPLOYMENT_LINE.exec(lines.at(-1) ?? "")?.groups?.outcome).toBe("failed");
 		expect(stamp()).toMatchObject({
@@ -2522,6 +2583,7 @@ describe("running the launcher", () => {
 		expect(installMode.code).toBe(1);
 		expect(installMode.lines.at(-1)).toBe("serverk: install failed: nope");
 		expect(installMode.lines.some((line) => DEPLOYMENT_LINE.test(line))).toBe(false);
+		expect(stagesOf(installMode.lines)).toEqual([]);
 
 		const startMode = launch({
 			SERVERK_INSTALL_COMMAND: "echo nope >&2; exit 3",
@@ -3644,6 +3706,11 @@ describe("running the launcher", () => {
 
 		expect(code).toBe(0);
 		expect(lines).toContain("parent-token-0");
+		expect(stagesOf(lines)).toEqual([
+			bridgeStageLine("dep_1", BotDeploymentStage.Sync),
+			bridgeStageLine("dep_1", BotDeploymentStage.Install),
+			bridgeStageLine("dep_1", BotDeploymentStage.Start),
+		]);
 		expect(stamp()).toMatchObject({
 			deployment: "dep_1",
 			outcome: "ready",

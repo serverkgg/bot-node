@@ -3114,6 +3114,14 @@ const resumeWithoutToken = (mode, context) => {
 	);
 };
 
+const enterStage = (context, stage) => {
+	context.stage = stage;
+
+	if (context.request?.deploying && context.request.deployment) {
+		say(`deployment ${context.request.deployment} stage ${stage}`);
+	}
+};
+
 const launch = async (mode, context) => {
 	const env = process.env;
 	const appDir = process.cwd();
@@ -3153,7 +3161,8 @@ const launch = async (mode, context) => {
 			}
 		}
 
-		context.stage = sourceStage(context.request);
+		enterStage(context, sourceStage(context.request));
+
 		context.synced = await syncSource(context);
 
 		if (env.SERVERK_GIT_TOKEN !== undefined) {
@@ -3164,8 +3173,7 @@ const launch = async (mode, context) => {
 	context.stage = sourceStage(context.request);
 	context.projectDir = resolveProjectDir(appDir, text(env.SERVERK_ROOT_DIRECTORY), sourceStage(context.request));
 
-	context.stage = Stage.Install;
-
+	enterStage(context, Stage.Install);
 	ensureCacheManifest(stateDir);
 
 	const project = await projectOf(context);
@@ -3185,12 +3193,12 @@ const launch = async (mode, context) => {
 	const build = buildCommand(project.serverkJson, project.packageJson, project.plan?.manager ?? null, context.table);
 
 	if (build) {
-		context.stage = Stage.Build;
+		enterStage(context, Stage.Build);
 
 		await buildProject(context, build);
 	}
 
-	context.stage = Stage.Start;
+	enterStage(context, Stage.Start);
 
 	const start = resolveStart(context.projectDir, env, context.table);
 
