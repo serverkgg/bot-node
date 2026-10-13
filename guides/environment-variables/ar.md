@@ -30,11 +30,13 @@ client.login(process.env.DISCORD_TOKEN);
 
 - أي اسم يبدأ بـ `SERVERK_`.
 - الأسماء التي تحمل إعدادات النشر: `REPO_URL` و `REPO_REF` و `REPO_BRANCH` و `START_COMMAND` و `INSTALL_COMMAND` و `ROOT_DIRECTORY` و `DEPLOYMENT_ID` و `SNAPSHOT_ID` و `BOT_PLATFORM` و `GIT_TOKEN`. غيّرها من إعدادات بوتك بدلًا من ذلك.
+- `BOT_WEB` و `BOT_PORT_1` و `BOT_PORT_2`، وهي مفاتيح عنوان الويب والمنفذين. فعّلها من **الإدارة** بدلًا من ذلك.
 - `PATH` و `HOME` و `TZ` و `VIRTUAL_ENV` و `PYTHONUNBUFFERED`، لأن بوتك يحتاجها ليشتغل.
 
 ونعطي بوتك هذه المتغيرات بأنفسنا:
 
 - `SERVERK_BOT` بقيمة `1`، و `SERVERK_SERVER_CODE` بقيمة كود بوتك.
 - `BOT_PLATFORM`: `discord` أو `telegram`.
+- `PORT` و `SERVERK_WEB_URL` و `SERVERK_WEB_HOST` ما دام عنوان الويب مفعّلًا، و `SERVERK_PORT_1` و `SERVERK_PORT_2` ما دام المنفذ مفعّلًا. ويشرحها «عنوان الويب والمنافذ لبوتك».
 
 > [!note] نضبط `NODE_OPTIONS` بحد للذاكرة يناسب باقتك. إذا أضفت `NODE_OPTIONS` بنفسك، فقيمتك هي التي تُستخدم عند تشغيل بوتك، فأبقِ فيها `--max-old-space-size` إذا احتجته. أما تثبيت المكتبات فيستخدم قيمتنا دائمًا.

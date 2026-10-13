@@ -36,6 +36,7 @@ import {
 	detect,
 	detectWantedFiles,
 	parseServerkJson,
+	platformEnvironment,
 	REPO_BRANCH_PATTERN,
 	REPO_REF_PATTERN,
 	REPO_URL_PATTERN,
@@ -62,6 +63,7 @@ import {
 	detectStart,
 	doomedTags,
 	ensureCacheManifest,
+	exposureLines,
 	failureDetail,
 	gitArgv,
 	gitEnvironment,
@@ -322,6 +324,36 @@ describe("agreeing with the bridge", () => {
 		expect(BRIDGE_DEPLOY_MARKER).toBe(`${BOT_STATE_DIR}/${DEPLOY_MARKER}`);
 		expect(DEFAULT_STATE_DIR).toBe(STATE_DIR);
 		expect(READY_PATTERN.test(READY_LINE)).toBe(true);
+	});
+
+	it("names the web address and each raw port from the variables the bridge hands the bot, and nothing while they are off", () => {
+		expect(
+			exposureLines(
+				platformEnvironment("bt7k2m9q4x", null, {
+					web: 8080,
+					webUrl: "https://mybot.srvk.gg",
+					port1: 29_004,
+					port2: 30_004,
+				}),
+			),
+		).toEqual([
+			"web address https://mybot.srvk.gg on port 8080",
+			"port 1 at mybot.srvk.gg:29004",
+			"port 2 at mybot.srvk.gg:30004",
+		]);
+		expect(
+			exposureLines(
+				platformEnvironment("bt7k2m9q4x", null, {
+					web: null,
+					webUrl: null,
+					port1: null,
+					port2: 30_004,
+				}),
+			),
+		).toEqual([
+			"port 2 on 30004",
+		]);
+		expect(exposureLines(platformEnvironment("bt7k2m9q4x", null))).toEqual([]);
 	});
 });
 
@@ -2512,6 +2544,58 @@ describe("running the launcher", () => {
 		expect(again.code).toBe(0);
 		expect(again.lines.some((line) => DEPLOYMENT_LINE.test(line))).toBe(false);
 		expect(historyCount()).toBe(1);
+	});
+
+	it("prints the web address and each raw port right before the start line, and none of them while they are off", () => {
+		place(
+			zipOf("one", {
+				"index.js": "one()",
+			}),
+			"snap_1",
+		);
+
+		const deployment = {
+			SERVERK_SNAPSHOT_ID: "snap_1",
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		};
+		const off = launch({
+			...deployment,
+			PORT: "3000",
+		});
+
+		expect(off.code).toBe(0);
+		expect(off.lines.filter((line) => /^serverk: (?:web address|port \d) /.test(line))).toEqual([]);
+
+		const on = launch({
+			...deployment,
+			PORT: "8080",
+			SERVERK_WEB_URL: "https://mybot.srvk.gg",
+			SERVERK_WEB_HOST: "mybot.srvk.gg",
+			SERVERK_PORT_1: "29004",
+			SERVERK_PORT_2: "30004",
+		});
+
+		expect(on.code).toBe(0);
+		expect(on.lines.slice(-6)).toEqual([
+			"serverk: web address https://mybot.srvk.gg on port 8080",
+			"serverk: port 1 at mybot.srvk.gg:29004",
+			"serverk: port 2 at mybot.srvk.gg:30004",
+			"serverk: start command: sh -c exec echo the bot ran",
+			READY_LINE,
+			"the bot ran",
+		]);
+
+		const raw = launch({
+			...deployment,
+			SERVERK_PORT_1: "29004",
+		});
+
+		expect(raw.lines.slice(-4)).toEqual([
+			"serverk: port 1 on 29004",
+			"serverk: start command: sh -c exec echo the bot ran",
+			READY_LINE,
+			"the bot ran",
+		]);
 	});
 
 	it("ends a failed deployment with the failure line and records it", () => {

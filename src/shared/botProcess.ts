@@ -1,6 +1,7 @@
 import type { Bridge } from "@serverkgg/bridge";
 import {
 	type BotPlatform,
+	botExposureOf,
 	botProcessEnvironment,
 	customerEnvironment,
 	inferBotPlatform,
@@ -34,6 +35,6 @@ export const processEnvironment = (context: Bridge.Context): Record<string, stri
 					}
 				: {}),
 		},
-		platform: platformEnvironment(context.server.code, botPlatformOf(context)),
+		platform: platformEnvironment(context.server.code, botPlatformOf(context), botExposureOf(context)),
 	});
 };

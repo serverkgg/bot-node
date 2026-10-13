@@ -71,6 +71,23 @@ export const NODE_OPTIONS_KEY = "SERVERK_NODE_OPTIONS";
 
 export const RESUME_KEY = "SERVERK_LAUNCH_RESUME";
 
+export const WEB_URL_KEY = "SERVERK_WEB_URL";
+
+export const WEB_HOST_KEY = "SERVERK_WEB_HOST";
+
+export const WEB_PORT_KEY = "PORT";
+
+export const RAW_PORT_KEYS = [
+	[
+		"port 1",
+		"SERVERK_PORT_1",
+	],
+	[
+		"port 2",
+		"SERVERK_PORT_2",
+	],
+];
+
 export const BUILT_IN_TABLE = {
 	version: DETECT_TABLE_VERSION,
 	procfile: {
@@ -610,6 +627,27 @@ export const deploymentLine = (deployment, outcome, details = {}) => {
 	}
 
 	return `serverk: deployment ${deployment} failed: ${details.stage}: ${oneLine(details.detail)}`;
+};
+
+export const exposureLines = (env) => {
+	const lines = [];
+	const url = text(env[WEB_URL_KEY]);
+	const port = text(env[WEB_PORT_KEY]);
+	const host = text(env[WEB_HOST_KEY]);
+
+	if (url && port) {
+		lines.push(`web address ${url} on port ${port}`);
+	}
+
+	for (const [label, key] of RAW_PORT_KEYS) {
+		const value = text(env[key]);
+
+		if (value) {
+			lines.push(host ? `${label} at ${host}:${value}` : `${label} on ${value}`);
+		}
+	}
+
+	return lines;
 };
 
 export const botEnvironment = (environment) => {
@@ -3217,6 +3255,10 @@ const launch = async (mode, context) => {
 
 	const [program, ...args] = start.argv;
 	const execEnv = startEnvironment(env, context.projectDir);
+
+	for (const line of exposureLines(env)) {
+		say(line);
+	}
 
 	say(`start command: ${start.argv.join(" ")}`);
 	process.stdout.write(`${READY_LINE}\n`);

@@ -7,7 +7,7 @@ This repository is a Telegram bot in Node.js with grammY, deployed on Serverk (s
 - Install: `npm ci` from `package-lock.json`. Start: `node index.js`, the `start` script in `package.json`. The image runs Node.js 24.
 - `serverk.json` declares the runtime, platform, framework and variables. One invalid field rejects the whole file.
 - Keep the `Logged in as` line: Serverk marks the bot ready when it prints it, or after 20 seconds alive.
-- The bot long-polls; webhook mode is not offered, since a bot publishes no port. One token runs one bot: a second copy polling the same token gets `409 Conflict`.
+- The bot long-polls. For webhook mode, turn on the web address in the bot's Manage page: the bot then gets `PORT`, `SERVERK_WEB_URL` and `SERVERK_WEB_HOST`, and must listen on `0.0.0.0` and `PORT`. One token runs one bot: a second copy polling the same token gets `409 Conflict`.
 
 ## Variables
 

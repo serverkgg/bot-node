@@ -23,6 +23,15 @@ Turn on the intents your code asks for on the Bot page of the Developer Portal, 
 
 One token runs only one bot at a time. Stop the other copy, such as one on your computer, or send `/revoke` to BotFather for a new token, update it in your variables, then redeploy.
 
+## A webhook is set on the token {#webhook-active}
+
+- `Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first`
+
+Telegram sends this text, inside the line your library prints, when your bot pulls messages by polling while its token still has a webhook set, from an old host or from when the web address was on. Pick one:
+
+- Move your code to the webhook and turn on the web address, as the guide "Your bot's web address and ports" shows.
+- Or delete the webhook once: open `https://api.telegram.org/botTOKEN/deleteWebhook` in your browser with your token in place of `TOKEN`, then start your bot again.
+
 ## A library is missing {#missing-dependency}
 
 - `Error: Cannot find module 'discord.js'`
@@ -48,6 +57,16 @@ The problem is on our side. [Contact us](/dashboard/support) and we'll add ffmpe
 - Or the line `error code: 1015`
 
 Give it a few minutes before you start it again, and check the code that sends requests in a loop.
+
+## Your bot isn't listening on its web address {#web-not-listening}
+
+The web address is on, but nothing answered on the port in `PORT`, so your bot's page warns you and the address shows "This bot isn't answering right now". Make your bot listen on `0.0.0.0` and `Number(process.env.PORT)`, not on `localhost` or `127.0.0.1` and not on a fixed number such as `3000`, then redeploy. The guide "Your bot's web address and ports" shows how for each library. If your bot doesn't need the web address, turn it off in **Manage**.
+
+## Your bot opens the same port twice {#port-busy}
+
+- `Error: listen EADDRINUSE: address already in use 0.0.0.0:8080`
+
+Nothing else uses your bot's ports, so this line means your code opens the same port twice, such as an Express server for your pages and Telegraf's webhook server both on `PORT`, or an old keep-alive server beside them. Open one server on `PORT` and add every route to it, then redeploy.
 
 ## Your bot stopped with exit code `137` {#oom-kill}
 
