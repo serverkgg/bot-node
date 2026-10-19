@@ -263,6 +263,10 @@ export const BUILT_IN_TABLE = {
 				file: ".tool-versions",
 				tool: "nodejs",
 			},
+			{
+				file: ".tool-versions",
+				tool: "node",
+			},
 		],
 		defaultVersion: "24",
 	},
