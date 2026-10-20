@@ -35,7 +35,7 @@ export const GIT_ASKPASS = "/serverk/git-askpass";
 
 export const DETECT_TABLE_PATH = "/serverk/detect.json";
 
-export const DETECT_TABLE_VERSION = 2;
+export const DETECT_TABLE_VERSION = 3;
 
 export const REPO_URL_PATTERN = /^https:\/\/[^\s@/]+\/\S+$/;
 
@@ -58,6 +58,7 @@ export const LAUNCHER_KEYS = [
 	"SERVERK_GIT_TOKEN",
 	"SERVERK_START_COMMAND",
 	"SERVERK_INSTALL_COMMAND",
+	"SERVERK_PRE_DEPLOY_COMMAND",
 	"SERVERK_ROOT_DIRECTORY",
 	"SERVERK_DEPLOYMENT_ID",
 	"SERVERK_SNAPSHOT_ID",
@@ -252,6 +253,12 @@ export const BUILT_IN_TABLE = {
 				"run",
 			],
 		},
+		preDeployCommands: [
+			{
+				file: "prisma/migrations/migration_lock.toml",
+				command: "prisma migrate deploy",
+			},
+		],
 		versionFiles: [
 			{
 				file: ".nvmrc",
@@ -313,6 +320,7 @@ export const Stage = {
 	Snapshot: "snapshot",
 	Install: "install",
 	Build: "build",
+	PreDeploy: "pre-deploy",
 	Start: "start",
 };
 
@@ -559,12 +567,17 @@ const INSTALL_HINT = "تعذّر تثبيت مكتبات بوتك. راجع ال
 const BUILD_HINT =
 	"تعذّر بناء كود بوتك. راجع السطور السابقة في الكونسول، ثم صحّح أمر البناء في package.json أو serverk.json وانشر من جديد.";
 
+const PRE_DEPLOY_HINT =
+	"تعذّر تنفيذ أمر ما قبل النشر لبوتك. راجع السطور السابقة في الكونسول، وتأكد من الأمر ومن متغيرات الاتصال بقاعدة البيانات، ثم انشر من جديد.";
+
 const START_HINT =
 	"لم نجد طريقة لتشغيل بوتك. أضف start إلى package.json أو ملف index.js، أو اضبط أمر التشغيل من إعدادات البوت.";
 
 const MEMORY_HINTS = {
 	install: "نفدت الرام أثناء تثبيت مكتبات بوتك، فتوقف التثبيت. ارفع الباقة للحصول على رام أكثر، ثم انشر من جديد.",
 	build: "نفدت الرام أثناء بناء كود بوتك، فتوقف البناء. ارفع الباقة للحصول على رام أكثر، ثم انشر من جديد.",
+	"pre-deploy":
+		"نفدت الرام أثناء تنفيذ أمر ما قبل النشر، فتوقف الأمر. ارفع الباقة للحصول على رام أكثر، ثم انشر من جديد.",
 };
 
 export class LaunchFailure extends Error {
@@ -781,6 +794,20 @@ const versionFilesOf = (value) => {
 	return valid ? value : null;
 };
 
+const preDeployCommandsOf = (value) => {
+	const valid =
+		Array.isArray(value)
+		&& value.every(
+			(entry) =>
+				typeof entry?.file === "string"
+				&& entry.file.length > 0
+				&& typeof entry.command === "string"
+				&& entry.command.trim().length > 0,
+		);
+
+	return valid ? value : null;
+};
+
 const commandsOf = (value, managers) => {
 	const valid =
 		typeof value === "object" && value !== null && managers.every((manager) => stringList(value[manager])?.length);
@@ -815,6 +842,7 @@ export const tableOf = (raw) => {
 	const locked = commandsOf(node.installCommands?.locked, managers);
 	const unlocked = commandsOf(node.installCommands?.unlocked, managers);
 	const runCommands = commandsOf(node.runCommands, managers);
+	const preDeployCommands = preDeployCommandsOf(node.preDeployCommands);
 	const versionFiles = versionFilesOf(node.versionFiles);
 	const names = [
 		node.manifest,
@@ -832,6 +860,7 @@ export const tableOf = (raw) => {
 		|| locked === null
 		|| unlocked === null
 		|| runCommands === null
+		|| preDeployCommands === null
 		|| versionFiles === null
 		|| typeof procfile.file !== "string"
 		|| typeof procfile.line !== "string"
@@ -862,6 +891,7 @@ export const tableOf = (raw) => {
 				unlocked,
 			},
 			runCommands,
+			preDeployCommands,
 			versionFiles,
 			defaultVersion: node.defaultVersion,
 		},
@@ -1077,6 +1107,7 @@ export const serverkJsonOf = (raw, table = BUILT_IN_TABLE) => {
 	const start = declaredCommand(document.start, rules.commandLengthLimit);
 	const install = declaredCommand(document.install, rules.commandLengthLimit);
 	const build = declaredCommand(document.build, rules.commandLengthLimit);
+	const preDeploy = declaredCommand(document.preDeploy, rules.commandLengthLimit);
 	const env = document.env;
 	const envValid =
 		env === undefined
@@ -1092,6 +1123,7 @@ export const serverkJsonOf = (raw, table = BUILT_IN_TABLE) => {
 		|| !start.ok
 		|| !install.ok
 		|| !build.ok
+		|| !preDeploy.ok
 		|| !envValid
 	) {
 		return null;
@@ -1101,6 +1133,7 @@ export const serverkJsonOf = (raw, table = BUILT_IN_TABLE) => {
 		start: start.value,
 		install: install.value,
 		build: build.value,
+		preDeploy: preDeploy.value,
 	};
 };
 
@@ -1265,6 +1298,18 @@ export const buildCommand = (serverkJson, packageJson, manager, table = BUILT_IN
 		command: argv.join(" "),
 		argv,
 	};
+};
+
+export const preDeployCommand = (env, serverkJson, has, table = BUILT_IN_TABLE) => {
+	const declared = text(env.SERVERK_PRE_DEPLOY_COMMAND) ?? serverkJson?.preDeploy ?? null;
+	const command = declared ?? table.node.preDeployCommands.find((rule) => has(rule.file))?.command ?? null;
+
+	return command === null
+		? null
+		: {
+				command,
+				argv: shellCommand(command),
+			};
 };
 
 const versionFromFile = (content, spec) => {
@@ -2897,6 +2942,7 @@ const projectOf = async (context) => {
 	return {
 		serverkJson,
 		installCommand: text(env.SERVERK_INSTALL_COMMAND) ?? serverkJson?.install ?? null,
+		preDeploy: preDeployCommand(env, serverkJson, (file) => isFile(join(projectDir, file)) && carried(file), table),
 		packageJson,
 		plan: detectManager(present, packageJson, table),
 		read,
@@ -3005,6 +3051,23 @@ const buildProject = async (context, build) => {
 	}
 
 	say("build finished");
+};
+
+const runPreDeploy = async (context, preDeploy) => {
+	const { projectDir, env } = context;
+
+	say(`running the pre-deploy command: ${preDeploy.command}`);
+
+	const result = await run(preDeploy.argv, {
+		cwd: projectDir,
+		env: startEnvironment(env, projectDir),
+	});
+
+	if (result.code !== 0) {
+		throw stageFailure(Stage.PreDeploy, PRE_DEPLOY_HINT, result);
+	}
+
+	say("pre-deploy command finished");
 };
 
 const resolveStart = (projectDir, env, table) => {
@@ -3238,6 +3301,12 @@ const launch = async (mode, context) => {
 		enterStage(context, Stage.Build);
 
 		await buildProject(context, build);
+	}
+
+	if (project.preDeploy && context.request.deploying) {
+		enterStage(context, Stage.PreDeploy);
+
+		await runPreDeploy(context, project.preDeploy);
 	}
 
 	enterStage(context, Stage.Start);

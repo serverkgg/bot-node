@@ -292,8 +292,8 @@ guides:
       ar: كيف نثبّت مشروع Node ونشغّله
       en: How we install and start a Node project
     summary:
-      ar: npm و pnpm و Yarn و Bun، و TypeScript والبناء، وترتيب أمر التشغيل، وإصدار Node.
-      en: npm, pnpm, Yarn and Bun, TypeScript and the build, the start order, and the Node version.
+      ar: npm و pnpm و Yarn و Bun، و TypeScript والبناء، وأمر ما قبل النشر، وترتيب أمر التشغيل، وإصدار Node.
+      en: npm, pnpm, Yarn and Bun, TypeScript and the build, the pre-deploy command, the start order, and the Node version.
     tags:
       - deploy
     surfaces:

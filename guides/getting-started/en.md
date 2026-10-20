@@ -14,6 +14,7 @@ After you pay, your bot's page opens and shows the deployment line by line:
 - We pull the code from your repository, or unpack what you uploaded.
 - We install the dependencies from `package.json` with `npm ci`, or with pnpm, Yarn or Bun when you ship their lockfile. We only reinstall when the dependencies change.
 - When `package.json` has a `build` script, we run it after the install, on every deployment.
+- When your bot has a pre-deploy command, such as `prisma migrate deploy`, we run it after the build and before your bot starts, on every deployment.
 - We start your bot with the first of these we find: the start command in your bot's settings, `start` in `serverk.json`, the `worker:` or `bot:` line of a `Procfile`, the `start` script in `package.json`, the file named in `main`, then `index.js`, `src/index.js`, `bot.js`, `src/bot.js` and `index.ts`.
 
 The moment these two lines show up in the console, your bot has started:

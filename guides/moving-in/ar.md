@@ -27,7 +27,7 @@
 
 نقرأ `package.json` وملف القفل و `Procfile`، ولا نقرأ إعدادات استضافتك القديمة:
 
-- **Heroku** و **Railway**: نشغّل سطر `worker:` أو `bot:` من `Procfile`، ولا نقرأ سطر `web:`.
+- **Heroku** و **Railway**: نشغّل سطر `worker:` أو `bot:` من `Procfile`، ولا نقرأ سطر `web:`. ولا نقرأ سطر `release:` ولا **Pre-deploy Command** في Railway، فضع أمره في أمر ما قبل النشر في إعدادات بوتك أو في الحقل `preDeploy` في `serverk.json`.
 - **Replit**: لا نقرأ ملف `.replit`.
 - **Discloud**: لا نقرأ `discloud.config`، فإذا لم نجد ملف `MAIN` الذي حدّدته فيه، فضعه في أمر `start`.
 - **استضافة Pterodactyl**: لا نقرأ أمر التشغيل من لوحتها، ولا حاجة إلى `git pull` عند التشغيل، بل اربط GitHub وفعّل **انشر مع كل push**.
@@ -40,6 +40,8 @@
   "start": "node src/main.js"
 }
 ```
+
+ويقبل `serverk.json` كذلك `install` و `build` و `preDeploy`، وكل منها أمر في سطر واحد. وأي حقل غير صحيح يُسقط الملف كاملًا.
 
 ويوضح شرح «كيف نثبّت مشروع Node ونشغّله» الملفات التي نبحث عنها بالترتيب.
 

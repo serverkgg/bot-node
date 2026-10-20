@@ -68,6 +68,12 @@ The web address is on, but nothing answered on the port in `PORT`, so your bot's
 
 Nothing else uses your bot's ports, so this line means your code opens the same port twice, such as an Express server for your pages and Telegraf's webhook server both on `PORT`, or an old keep-alive server beside them. Open one server on `PORT` and add every route to it, then redeploy.
 
+## The pre-deploy command failed {#pre-deploy}
+
+- `serverk: deployment dep_a1b2c3d4 failed: pre-deploy:`
+
+Your pre-deploy command ended with an error, so the deployment stopped and your bot didn't start. Read the lines the command printed above this one in the console. The cause is often the database connection variable, such as `DATABASE_URL`: check that it's in your bot's variables and that your database accepts connections from outside its own network, then redeploy. If the command we detected doesn't fit your project, set your own in your bot's settings or in the `preDeploy` field of `serverk.json`.
+
 ## Your bot stopped with exit code `137` {#oom-kill}
 
 Your plan's RAM ran out while your bot was running. Nothing is printed: your bot stops at once with exit code `137`, and its page shows "Not enough RAM". Upgrade the plan for more RAM, or cut down what your bot keeps in memory.
@@ -78,6 +84,6 @@ Your plan's RAM ran out while your bot was running. Nothing is printed: your bot
 - `serverk: install failed: it ran out of memory and was stopped`
 - Then `serverk: deployment dep_a1b2c3d4 failed: install: out-of-memory`
 
-Node prints the first line when its memory fills up while your bot runs. The other two mean the install ran out of RAM, and you see `build` in place of `install` when the build did. Upgrade the plan for more RAM, then redeploy.
+Node prints the first line when its memory fills up while your bot runs. The other two mean the install ran out of RAM, and you see `build` in place of `install` when the build did, or `pre-deploy` when the pre-deploy command did. Upgrade the plan for more RAM, then redeploy.
 
 > [!note] Your line isn't here? The first red line in the console still says what went wrong, and the guide "Read the console and work out what happened" shows how to read it.

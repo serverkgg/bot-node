@@ -5,7 +5,8 @@ This repository is a Discord bot in Node.js with discord.js, deployed on Serverk
 ## Run on Serverk
 
 - Install: `npm ci` from `package-lock.json`. Start: `node index.js`, the `start` script in `package.json`. The image runs Node.js 24.
-- `serverk.json` declares the runtime, platform, framework and variables. One invalid field rejects the whole file.
+- `serverk.json` declares the runtime, platform, framework and variables, and may set `install`, `build`, `preDeploy` and `start`, each a one-line command. One invalid field rejects the whole file.
+- `preDeploy` runs once per deployment, after install and build and before start, with the bot's variables and `node_modules/.bin` on `PATH`; database migrations go there, never in `start`. A non-zero exit fails the deployment at stage `pre-deploy`. Without one, `prisma/migrations/migration_lock.toml` gives `prisma migrate deploy`.
 - Keep the `Logged in as` line: Serverk marks the bot ready when it prints it, or after 20 seconds alive.
 - The bot asks for the `Guilds` intent only. A privileged intent (`MessageContent`, `GuildMembers`, `GuildPresences`) must be turned on in the Developer Portal first, or the login fails with `Used disallowed intents`.
 - The bot publishes no port until the web address is turned on in the bot's Manage page: the bot then gets `PORT`, `SERVERK_WEB_URL` and `SERVERK_WEB_HOST`, and must listen on `0.0.0.0` and `PORT`.

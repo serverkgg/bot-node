@@ -26,6 +26,18 @@
 
 إذا كان في `package.json` سكربت `build`، نشغّله بعد التثبيت بالأداة نفسها، مثل `npm run build`، في كل نشر، ولا نعيده عند الريستارت العادي. يظهر في الكونسول `building: npm run build` ثم `build finished`، وإذا فشل البناء يتوقف النشر في مرحلة `build`. ولأمر بناء مختلف، اكتبه في الحقل `build` في `serverk.json`.
 
+## أمر ما قبل النشر
+
+يشتغل أمر ما قبل النشر مرة واحدة في كل نشر، بعد التثبيت والبناء وقبل تشغيل بوتك، وهو مكان ترحيلات قاعدة البيانات. نشغّله في مجلد الكود بمتغيرات بوتك نفسها، و `node_modules/.bin` في المسار، فيعمل أمر مثل `prisma migrate deploy` كما هو. ولا نعيده عند الريستارت العادي، وإذا فشل النشر نشغّله من جديد في التشغيل التالي للنشر نفسه.
+
+أول تطابق هو المعتمد:
+
+1. أمر ما قبل النشر في إعدادات بوتك.
+2. الحقل `preDeploy` في `serverk.json`.
+3. `prisma migrate deploy` إذا كان في كودك الملف `prisma/migrations/migration_lock.toml`. وأبقِ `prisma` في مكتبات `package.json`.
+
+يظهر في الكونسول `running the pre-deploy command: prisma migrate deploy` ثم `pre-deploy command finished`. وإذا فشل الأمر يتوقف النشر في مرحلة `pre-deploy` ولا يبدأ بوتك.
+
 ## TypeScript
 
 - مع البناء: `"build": "tsc"` و `"start": "node dist/index.js"`. ويبقى `typescript` في `devDependencies` كما هو، لأننا نثبّتها أيضًا. ولا تضف `NODE_ENV=production` إلى المتغيرات، فمعه يتجاوز npm مكتبات `devDependencies` ولا يجد البناء `tsc`.
@@ -43,7 +55,7 @@
 5. الملف المذكور في `main` في `package.json`، بـ `node`.
 6. `index.js` ثم `src/index.js` ثم `bot.js` ثم `src/bot.js` ثم `index.ts`، بـ `node`.
 
-نشغّل أمر سكربت `start` مباشرة، لا عبر `npm start`، فلا يشتغل سكربت `prestart`. ضع خطوته في `build` بدلًا منه.
+نشغّل أمر سكربت `start` مباشرة، لا عبر `npm start`، فلا يشتغل سكربت `prestart`. ضع خطوته في `build` بدلًا منه، أو في أمر ما قبل النشر إذا كانت ترحيلات قاعدة البيانات.
 
 ## إصدار Node
 

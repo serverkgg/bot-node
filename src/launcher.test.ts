@@ -87,6 +87,7 @@ import {
 	Outcome,
 	occupiedEntries,
 	parseMarker,
+	preDeployCommand,
 	procfileCommand,
 	READY_LINE,
 	RESUME_KEY,
@@ -243,6 +244,29 @@ describe("the detection table", () => {
 				enginesKey: null,
 			}),
 		).toBeNull();
+		expect(
+			nodeWith({
+				preDeployCommands: undefined,
+			}),
+		).toBeNull();
+		expect(
+			nodeWith({
+				preDeployCommands: [
+					{
+						file: "prisma/migrations/migration_lock.toml",
+						command: " ",
+					},
+				],
+			}),
+		).toBeNull();
+		expect(
+			tableOf(
+				JSON.stringify({
+					...DETECT_TABLE,
+					version: 2,
+				}),
+			),
+		).toBeNull();
 	});
 });
 
@@ -255,6 +279,10 @@ describe("agreeing with the bridge", () => {
 		expect(ID_PATTERN.source).toBe(SNAPSHOT_ID_PATTERN.source);
 		expect(LAUNCHER_ROOT_PATTERN.source).toBe(ROOT_DIRECTORY_PATTERN.source);
 		expect(LAUNCHER_ROOT_LIMIT).toBe(ROOT_DIRECTORY_LENGTH_LIMIT);
+	});
+
+	it("names every deployment stage the way the bridge reads it, in the same order", () => {
+		expect(Object.values(Stage)).toEqual(Object.values(BotDeploymentStage));
 	});
 
 	it("strips exactly the launcher keys the driver hands it, plus its own resume state", () => {
@@ -275,6 +303,7 @@ describe("agreeing with the bridge", () => {
 				SERVERK_GIT_TOKEN: "ghs_installation",
 				SERVERK_REPO_REF: SHA,
 				SERVERK_INSTALL_COMMAND: "npm i",
+				SERVERK_PRE_DEPLOY_COMMAND: "prisma migrate deploy",
 				DISCORD_TOKEN: "token",
 				SERVERK_BOT: "1",
 			}),
@@ -742,6 +771,27 @@ const SERVERK_JSON_SAMPLES = [
 		build: "",
 	}),
 	JSON.stringify({
+		preDeploy: " prisma migrate deploy ",
+		start: "node index.js",
+	}),
+	JSON.stringify({
+		preDeploy: "",
+		start: "node index.js",
+	}),
+	JSON.stringify({
+		preDeploy: [
+			"prisma",
+			"migrate",
+			"deploy",
+		],
+	}),
+	JSON.stringify({
+		preDeploy: "prisma migrate deploy\nnode index.js",
+	}),
+	JSON.stringify({
+		preDeploy: "x".repeat(1025),
+	}),
+	JSON.stringify({
 		build: [
 			"tsc",
 		],
@@ -845,6 +895,7 @@ const kitCommands = (raw: string) => {
 				start: parsed.start,
 				install: parsed.install,
 				build: parsed.build,
+				preDeploy: parsed.preDeploy,
 			}
 		: null;
 };
@@ -943,6 +994,111 @@ describe("reading serverk.json", () => {
 				serverkJson,
 			})?.source,
 		).toBe("start-command");
+	});
+});
+
+describe("resolving the pre-deploy command", () => {
+	const PRISMA_LOCK = "prisma/migrations/migration_lock.toml";
+
+	it("takes the panel's command, then serverk.json's, then the migration tool the code carries", () => {
+		const serverkJson = serverkJsonOf(
+			JSON.stringify({
+				preDeploy: "npm run migrate",
+			}),
+		);
+		const has = (file: string) => file === PRISMA_LOCK;
+
+		expect(
+			preDeployCommand(
+				{
+					SERVERK_PRE_DEPLOY_COMMAND: "node migrate.js",
+				},
+				serverkJson,
+				has,
+			),
+		).toEqual({
+			command: "node migrate.js",
+			argv: [
+				"sh",
+				"-c",
+				"exec node migrate.js",
+			],
+		});
+		expect(
+			preDeployCommand(
+				{
+					SERVERK_PRE_DEPLOY_COMMAND: "  ",
+				},
+				serverkJson,
+				has,
+			)?.command,
+		).toBe("npm run migrate");
+		expect(preDeployCommand({}, null, has)?.command).toBe("prisma migrate deploy");
+		expect(preDeployCommand({}, null, () => false)).toBeNull();
+	});
+
+	it("detects the same command the bridge's inspection shows", () => {
+		const samples: [
+			string[],
+			string | null,
+		][] = [
+			[
+				[],
+				null,
+			],
+			[
+				[
+					PRISMA_LOCK,
+				],
+				null,
+			],
+			[
+				[
+					"prisma/schema.prisma",
+				],
+				null,
+			],
+			[
+				[
+					PRISMA_LOCK,
+				],
+				JSON.stringify({
+					preDeploy: "npm run db:migrate",
+				}),
+			],
+			[
+				[],
+				JSON.stringify({
+					preDeploy: "node migrate.js",
+				}),
+			],
+		];
+
+		for (const [files, serverk] of samples) {
+			const paths = [
+				"package.json",
+				...files,
+			];
+			const result = detect({
+				files: paths.map((path) => ({
+					path,
+				})),
+				contents: {
+					"package.json": "{}",
+					...(serverk === null
+						? {}
+						: {
+								"serverk.json": serverk,
+							}),
+				},
+			});
+			const label = `${paths.join(", ")} ${serverk}`;
+
+			expect(
+				preDeployCommand({}, serverkJsonOf(serverk), (file: string) => files.includes(file))?.command ?? null,
+				label,
+			).toBe(result.preDeploy?.command ?? null);
+		}
 	});
 });
 
@@ -1092,6 +1248,7 @@ describe("recording why a command failed", () => {
 		for (const stage of [
 			Stage.Install,
 			Stage.Build,
+			Stage.PreDeploy,
 		]) {
 			const failure = stageFailure(stage, "hint", {
 				code: 137,
@@ -2522,6 +2679,12 @@ describe("running the launcher", () => {
 
 		expect(restart.code).toBe(0);
 		expect(stagesOf(restart.lines)).toEqual([]);
+		expect(
+			[
+				...deployed.lines,
+				...restart.lines,
+			].some((line) => line.includes("pre-deploy")),
+		).toBe(false);
 	});
 
 	it("starts a deployment that already ran without announcing it again", () => {
@@ -3500,6 +3663,169 @@ describe("running the launcher", () => {
 			stage: "build",
 			detail: "cannot find module discord.js",
 		});
+	});
+
+	const binScript = (name: string, body: string) => {
+		mkdirSync(join(app, "node_modules", ".bin"), {
+			recursive: true,
+		});
+		writeFileSync(join(app, "node_modules", ".bin", name), `#!/bin/sh\n${body}\n`, {
+			mode: 0o755,
+		});
+	};
+
+	it("runs the pre-deploy command on a deployment after the build and before the start, with the bot's variables and node_modules/.bin on PATH", () => {
+		binScript("migrate", 'echo "migrated with $DISCORD_TOKEN, ci [$CI], $NODE_OPTIONS, [$SERVERK_PRE_DEPLOY_COMMAND]"');
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				install: "echo declared install",
+				build: "echo declared build",
+			}),
+		);
+
+		const env = {
+			SERVERK_DEPLOYMENT_ID: "dep_m",
+			SERVERK_PRE_DEPLOY_COMMAND: "migrate",
+			SERVERK_NODE_OPTIONS: "--enable-source-maps",
+			DISCORD_TOKEN: "token",
+		};
+		const deployed = launch(env);
+
+		expect(deployed.code).toBe(0);
+		expect(stagesOf(deployed.lines)).toEqual([
+			bridgeStageLine("dep_m", BotDeploymentStage.Sync),
+			bridgeStageLine("dep_m", BotDeploymentStage.Install),
+			bridgeStageLine("dep_m", BotDeploymentStage.Build),
+			bridgeStageLine("dep_m", BotDeploymentStage.PreDeploy),
+			bridgeStageLine("dep_m", BotDeploymentStage.Start),
+		]);
+		expect(
+			deployed.lines.slice(deployed.lines.indexOf("serverk: build finished"), deployed.lines.indexOf(READY_LINE) + 1),
+		).toEqual([
+			"serverk: build finished",
+			bridgeStageLine("dep_m", BotDeploymentStage.PreDeploy),
+			"serverk: running the pre-deploy command: migrate",
+			"migrated with token, ci [], --enable-source-maps, []",
+			"serverk: pre-deploy command finished",
+			bridgeStageLine("dep_m", BotDeploymentStage.Start),
+			"serverk: start command: sh -c exec echo the bot ran",
+			READY_LINE,
+		]);
+
+		const restart = launch(env);
+
+		expect(restart.code).toBe(0);
+		expect(stagesOf(restart.lines)).toEqual([]);
+		expect(restart.lines.some((line) => line.includes("pre-deploy") || line.startsWith("migrated"))).toBe(false);
+		expect(restart.lines.at(-1)).toBe("the bot ran");
+	});
+
+	it("fails the pre-deploy stage with the hint, records it, and runs the command again on the next start of that deployment", () => {
+		binScript("migrate", "if [ -f ready ]; then echo migrated; else echo cannot reach the database >&2; exit 4; fi");
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				preDeploy: "migrate",
+			}),
+		);
+
+		const env = {
+			SERVERK_DEPLOYMENT_ID: "dep_p",
+		};
+		const failed = launch(env);
+
+		expect(failed.code).toBe(1);
+		expect(stagesOf(failed.lines).at(-1)).toBe(bridgeStageLine("dep_p", BotDeploymentStage.PreDeploy));
+		expect(failed.lines.some((line) => line.includes("تعذّر تنفيذ أمر ما قبل النشر"))).toBe(true);
+		expect(failed.lines).not.toContain(READY_LINE);
+		expect(failed.lines.at(-1)).toBe("serverk: deployment dep_p failed: pre-deploy: cannot reach the database");
+		expect(DEPLOYMENT_LINE.exec(failed.lines.at(-1) ?? "")?.groups?.stage).toBe(BotDeploymentStage.PreDeploy);
+		expect(stamp()).toMatchObject({
+			deployment: "dep_p",
+			outcome: "failed",
+			stage: BotDeploymentStage.PreDeploy,
+			detail: "cannot reach the database",
+		});
+
+		writeFileSync(join(app, "ready"), "");
+
+		const again = launch(env);
+
+		expect(again.code).toBe(0);
+		expect(stagesOf(again.lines)).toContain(bridgeStageLine("dep_p", BotDeploymentStage.PreDeploy));
+		expect(again.lines).toContain("migrated");
+		expect(again.lines.at(-1)).toBe("the bot ran");
+		expect(stamp()).toMatchObject({
+			deployment: "dep_p",
+			outcome: "ready",
+		});
+	});
+
+	it("fails a deployment whose pre-deploy command the memory limit killed with out-of-memory", () => {
+		const { code, lines } = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_o",
+			SERVERK_PRE_DEPLOY_COMMAND: "echo migrating; kill -9 $$",
+		});
+
+		expect(code).toBe(1);
+		expect(lines.at(-1)).toBe("serverk: deployment dep_o failed: pre-deploy: out-of-memory");
+		expect(lines.some((line) => line.includes("نفدت الرام أثناء تنفيذ أمر ما قبل النشر"))).toBe(true);
+	});
+
+	it("detects prisma migrate deploy from the migration lock when no command is set, and the panel's command beats serverk.json's", () => {
+		binScript("prisma", 'echo "prisma $*"');
+		mkdirSync(join(app, "prisma", "migrations"), {
+			recursive: true,
+		});
+		writeFileSync(join(app, "prisma", "migrations", "migration_lock.toml"), 'provider = "postgresql"\n');
+
+		const detected = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_1",
+		});
+
+		expect(detected.code).toBe(0);
+		expect(detected.lines).toContain("serverk: running the pre-deploy command: prisma migrate deploy");
+		expect(detected.lines).toContain("prisma migrate deploy");
+
+		writeFileSync(
+			join(app, "serverk.json"),
+			JSON.stringify({
+				preDeploy: "echo from serverk.json",
+			}),
+		);
+
+		const declared = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+		});
+
+		expect(declared.lines).toContain("from serverk.json");
+		expect(declared.lines).not.toContain("prisma migrate deploy");
+
+		const panel = launch({
+			SERVERK_DEPLOYMENT_ID: "dep_3",
+			SERVERK_PRE_DEPLOY_COMMAND: "echo from the panel",
+		});
+
+		expect(panel.lines).toContain("from the panel");
+		expect(panel.lines).not.toContain("from serverk.json");
+		expect(panel.lines).not.toContain("prisma migrate deploy");
+	});
+
+	it("never runs the pre-deploy command in install mode", () => {
+		const { code, lines } = launch(
+			{
+				SERVERK_DEPLOYMENT_ID: "dep_i",
+				SERVERK_PRE_DEPLOY_COMMAND: "echo migrated",
+			},
+			[
+				"install",
+			],
+		);
+
+		expect(code).toBe(0);
+		expect(lines).not.toContain("migrated");
+		expect(lines.some((line) => line.includes("pre-deploy"))).toBe(false);
 	});
 
 	it("says when the code asks for a Node version this runtime does not have, and carries on", () => {

@@ -26,6 +26,18 @@ We only install again when the install command, the Node version, `package.json`
 
 When `package.json` has a `build` script, we run it after the install with the same tool, such as `npm run build`, on every deployment, and skip it on a plain restart. The console shows `building: npm run build`, then `build finished`. A failed build stops the deployment at stage `build`. For a different build command, set the `build` field in `serverk.json`.
 
+## The pre-deploy command
+
+The pre-deploy command runs once per deployment, after the install and the build and before your bot starts. It's the place for your database migrations. We run it in your code's folder with your bot's own variables and `node_modules/.bin` on the path, so a command such as `prisma migrate deploy` works as is. A plain restart skips it, and when a deployment fails, the next start of that same deployment runs it again.
+
+The first match wins:
+
+1. The pre-deploy command in your bot's settings.
+2. The `preDeploy` field in `serverk.json`.
+3. `prisma migrate deploy`, when your code has `prisma/migrations/migration_lock.toml`. Keep `prisma` in the dependencies of `package.json`.
+
+The console shows `running the pre-deploy command: prisma migrate deploy`, then `pre-deploy command finished`. A failed command stops the deployment at stage `pre-deploy`, and your bot doesn't start.
+
 ## TypeScript
 
 - With a build: `"build": "tsc"` and `"start": "node dist/index.js"`. `typescript` can stay in `devDependencies`, because we install those too. Don't add `NODE_ENV=production` to your variables: with it, npm skips `devDependencies` and the build can't find `tsc`.
@@ -43,7 +55,7 @@ The first match wins:
 5. The file named in `main` in `package.json`, with `node`.
 6. `index.js`, then `src/index.js`, `bot.js`, `src/bot.js` and `index.ts`, with `node`.
 
-We run the `start` script's command directly, not through `npm start`, so a `prestart` script doesn't run. Put that step in `build` instead.
+We run the `start` script's command directly, not through `npm start`, so a `prestart` script doesn't run. Put that step in `build` instead, or in the pre-deploy command when it runs database migrations.
 
 ## Node version
 

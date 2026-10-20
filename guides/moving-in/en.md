@@ -27,7 +27,7 @@ If your `start` script runs `node --env-file=.env`, remove that flag, because th
 
 We read `package.json`, the lockfile and a `Procfile`, never your old host's own settings:
 
-- **Heroku** and **Railway**: we run the `worker:` or `bot:` line of your `Procfile`. A `web:` line isn't read.
+- **Heroku** and **Railway**: we run the `worker:` or `bot:` line of your `Procfile`. A `web:` line isn't read. Neither is a `release:` line or Railway's **Pre-deploy Command**, so put that command in the pre-deploy command in your bot's settings or in the `preDeploy` field of `serverk.json`.
 - **Replit**: the `.replit` file isn't read.
 - **Discloud**: `discloud.config` isn't read, so if we don't find the `MAIN` file it names, put that file in your `start` script.
 - **A Pterodactyl host**: the startup command in its panel isn't read, and you don't need a `git pull` at start. Link GitHub and turn on **Deploy on every push** instead.
@@ -40,6 +40,8 @@ When we find no way to start your bot, add a `start` script to `package.json`, o
   "start": "node src/main.js"
 }
 ```
+
+`serverk.json` also takes `install`, `build` and `preDeploy`, each a command on one line. One invalid field drops the whole file.
 
 The guide "How we install and start a Node project" lists the files we look for, in order.
 

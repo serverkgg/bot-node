@@ -7,7 +7,8 @@ Every deployment walks the same steps:
 1. We pull the commit from your repository, or unpack the version you uploaded.
 2. We install the dependencies if they changed.
 3. We run the `build` script when `package.json` has one, on every deployment.
-4. We start your bot and print the success line:
+4. We run your pre-deploy command when your bot has one, such as your database migrations, on every deployment.
+5. We start your bot and print the success line:
 
 ```txt
 serverk: deployment dep_a1b2c3d4 ready at 3f2a9c1b7d10
@@ -23,7 +24,7 @@ If a step fails, the deployment stops and the last line in the console says wher
 serverk: deployment dep_a1b2c3d4 failed: install: npm error code ERESOLVE
 ```
 
-The step is one of `sync` (pulling the code), `snapshot` (unpacking an uploaded version), `install` (the dependencies), `build` (the build) or `start` (starting the bot). Fix the cause and redeploy, or roll back to the last deployment that worked.
+The step is one of `sync` (pulling the code), `snapshot` (unpacking an uploaded version), `install` (the dependencies), `build` (the build), `pre-deploy` (the pre-deploy command) or `start` (starting the bot). Fix the cause and redeploy, or roll back to the last deployment that worked.
 
 @[open](console)
 
