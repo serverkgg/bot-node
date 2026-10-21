@@ -38,6 +38,20 @@ The first match wins:
 
 The console shows `running the pre-deploy command: prisma migrate deploy`, then `pre-deploy command finished`. A failed command stops the deployment at stage `pre-deploy`, and your bot doesn't start.
 
+## A command you run from the console
+
+The pre-deploy command runs on every deployment, so keep your migrations there. For a task you run once by hand, type its command in the console instead, such as:
+
+- `npx prisma db seed` to fill your database with its starting data.
+- `node scripts/backfill.js` to run one of your own scripts once.
+- `npm ls discord.js` to see which version of a library is installed.
+
+We run it the way we run your bot: in your code's folder, as the same user your bot runs as, with your bot's variables and `node_modules/.bin` on the path. It works even while your bot is stopped or has crashed. Its output prints in the console, then `serverk: command finished`, or `serverk: command failed (exit 1)`, where the number is the command's exit code. The next deployment puts back every file your code carries, so a lasting change, such as a new library, belongs in your code.
+
+One command runs at a time, for 10 minutes at most, and its output stops at 256 KiB. A command can't read input, so one that asks a question ends at once: add its flag that skips the questions, such as `--yes`. Before your bot's first deployment, the console answers `serverk: deploy the bot first`.
+
+@[open](console)
+
 ## TypeScript
 
 - With a build: `"build": "tsc"` and `"start": "node dist/index.js"`. `typescript` can stay in `devDependencies`, because we install those too. Don't add `NODE_ENV=production` to your variables: with it, npm skips `devDependencies` and the build can't find `tsc`.

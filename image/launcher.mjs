@@ -15,6 +15,7 @@ import {
 	rmSync,
 	statSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import { basename, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +60,7 @@ export const LAUNCHER_KEYS = [
 	"SERVERK_START_COMMAND",
 	"SERVERK_INSTALL_COMMAND",
 	"SERVERK_PRE_DEPLOY_COMMAND",
+	"SERVERK_RUN_COMMAND",
 	"SERVERK_ROOT_DIRECTORY",
 	"SERVERK_DEPLOYMENT_ID",
 	"SERVERK_SNAPSHOT_ID",
@@ -71,6 +73,12 @@ export const LAUNCHER_KEYS = [
 export const NODE_OPTIONS_KEY = "SERVERK_NODE_OPTIONS";
 
 export const RESUME_KEY = "SERVERK_LAUNCH_RESUME";
+
+export const RUN_KEY = "SERVERK_RUN_COMMAND";
+
+export const RUN_MODE = "run";
+
+export const RUN_SHELL = "/bin/sh";
 
 export const WEB_URL_KEY = "SERVERK_WEB_URL";
 
@@ -608,6 +616,10 @@ export const stageFailure = (stage, hint, result) => {
 
 export const say = (line) => {
 	process.stdout.write(`serverk: ${line}\n`);
+};
+
+export const sayDirect = (line) => {
+	writeSync(1, `serverk: ${line}\n`);
 };
 
 const text = (value) => {
@@ -3347,6 +3359,42 @@ const launch = async (mode, context) => {
 	);
 };
 
+const runCommand = async (context) => {
+	const env = process.env;
+	const appDir = process.cwd();
+
+	context.stage = RUN_MODE;
+
+	if (occupiedEntries(readdirSync(appDir)).length === 0) {
+		throw new LaunchFailure(RUN_MODE, null, "deploy the bot first", "no deployed code", EXIT_CONFIG);
+	}
+
+	const command = text(env[RUN_KEY]);
+
+	if (command === null) {
+		throw new LaunchFailure(RUN_MODE, null, `${RUN_MODE} failed: no command`, "no command", EXIT_CONFIG);
+	}
+
+	const projectDir = resolveProjectDir(appDir, text(env.SERVERK_ROOT_DIRECTORY), RUN_MODE);
+
+	sayDirect(`running: ${redactor(text(env.SERVERK_GIT_TOKEN))(command)}`);
+
+	process.chdir(projectDir);
+	process.execve(
+		RUN_SHELL,
+		[
+			RUN_SHELL,
+			"-c",
+			command,
+		],
+		startEnvironment(env, projectDir),
+	);
+};
+
+const modeOf = (argument) => {
+	return argument === "install" || argument === RUN_MODE ? argument : "start";
+};
+
 const invokedDirectly = () => {
 	const entry = process.argv[1];
 
@@ -3368,7 +3416,10 @@ if (invokedDirectly()) {
 		synced: null,
 	};
 
-	launch(process.argv[2] === "install" ? "install" : "start", context).catch((error) => {
+	const mode = modeOf(process.argv[2]);
+	const print = mode === RUN_MODE ? sayDirect : say;
+
+	(mode === RUN_MODE ? runCommand(context) : launch(mode, context)).catch((error) => {
 		const failure =
 			error instanceof LaunchFailure
 				? error
@@ -3380,10 +3431,10 @@ if (invokedDirectly()) {
 					);
 
 		if (failure.arabic) {
-			say(failure.arabic);
+			print(failure.arabic);
 		}
 
-		say(failure.english);
+		print(failure.english);
 
 		if (context.stateDir) {
 			recordDeployment(context, Outcome.Failed, {

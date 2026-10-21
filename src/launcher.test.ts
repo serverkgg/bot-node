@@ -62,6 +62,7 @@ import {
 	detectManager,
 	detectStart,
 	doomedTags,
+	EXIT_CONFIG,
 	ensureCacheManifest,
 	exposureLines,
 	failureDetail,
@@ -91,6 +92,7 @@ import {
 	procfileCommand,
 	READY_LINE,
 	RESUME_KEY,
+	RUN_MODE,
 	readSourceFiles,
 	relativeFile,
 	repoHost,
@@ -4344,4 +4346,273 @@ describe("running the launcher", () => {
 		).toBe(0);
 		expect(readFileSync(join(app, "index.js"), "utf8")).toBe("v2()");
 	}, 60_000);
+});
+
+describe("running a one-off command", () => {
+	let root = "";
+	let app = "";
+	let state = "";
+
+	const runCommand = (env: Record<string, string>) => {
+		const result = Bun.spawnSync(
+			[
+				"node",
+				LAUNCHER,
+				RUN_MODE,
+			],
+			{
+				cwd: app,
+				env: {
+					PATH: process.env.PATH ?? "/usr/bin:/bin",
+					HOME: root,
+					SERVERK_STATE_DIR: state,
+					...env,
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const linesOf = (output: Buffer) => {
+			const shown = output.toString().trim();
+
+			return shown.length === 0 ? [] : shown.split("\n");
+		};
+
+		return {
+			code: result.exitCode,
+			lines: linesOf(result.stdout),
+			errors: linesOf(result.stderr),
+		};
+	};
+
+	const writeApp = (files: Record<string, string>, mode = 0o644) => {
+		for (const [file, content] of Object.entries(files)) {
+			mkdirSync(join(app, file, ".."), {
+				recursive: true,
+			});
+			writeFileSync(join(app, file), content, {
+				mode,
+			});
+		}
+	};
+
+	const listing = (dir: string) => {
+		return readdirSync(dir, {
+			recursive: true,
+		})
+			.map(String)
+			.sort();
+	};
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "bot-node-run-"));
+		app = join(root, "app");
+		state = join(app, BOT_STATE_DIR);
+
+		mkdirSync(state, {
+			recursive: true,
+		});
+	});
+
+	afterEach(() => {
+		rmSync(root, {
+			force: true,
+			recursive: true,
+		});
+	});
+
+	it("runs the command in the root directory with the start command's environment and node_modules/.bin first on PATH", () => {
+		writeApp({
+			"apps/bot/index.js": "run()",
+		});
+		writeApp(
+			{
+				"apps/bot/node_modules/.bin/seed": [
+					"#!/bin/sh",
+					'echo "seeded $1 in $(pwd) with $DISCORD_TOKEN, $NODE_OPTIONS, token [$SERVERK_GIT_TOKEN], command [$SERVERK_RUN_COMMAND]"',
+					'echo "seed warning" >&2',
+				].join("\n"),
+			},
+			0o755,
+		);
+
+		const { code, lines, errors } = runCommand({
+			SERVERK_ROOT_DIRECTORY: "apps/bot",
+			SERVERK_RUN_COMMAND: " seed --all ",
+			SERVERK_NODE_OPTIONS: "--enable-source-maps",
+			SERVERK_GIT_TOKEN: "ghs_installation",
+			DISCORD_TOKEN: "token",
+		});
+
+		expect(code).toBe(0);
+		expect(lines).toEqual([
+			"serverk: running: seed --all",
+			`seeded --all in ${realpathSync(join(app, "apps", "bot"))} with token, --enable-source-maps, token [], command []`,
+		]);
+		expect(errors).toEqual([
+			"seed warning",
+		]);
+	});
+
+	it("masks the git token in the line that names the command and leaves it out of the command's own environment", () => {
+		writeApp({
+			"index.js": "run()",
+		});
+
+		const { code, lines } = runCommand({
+			SERVERK_GIT_TOKEN: "ghs_installation",
+			SERVERK_RUN_COMMAND:
+				"echo launcher-token-$(tr '\\0' '\\n' < /proc/$$/environ | grep -c '^SERVERK_GIT_TOKEN=') # ghs_installation",
+		});
+
+		expect(code).toBe(0);
+		expect(lines).toEqual([
+			"serverk: running: echo launcher-token-$(tr '\\0' '\\n' < /proc/$$/environ | grep -c '^SERVERK_GIT_TOKEN=') # ***",
+			"launcher-token-0",
+		]);
+	});
+
+	it.skipIf(!existsSync("/proc/self/fdinfo"))(
+		"hands the command a blocking stdout and stderr, so a fast writer never meets a full pipe with EAGAIN",
+		() => {
+			writeApp({
+				"index.js": "run()",
+			});
+
+			const { code, lines } = runCommand({
+				SERVERK_GIT_TOKEN: "ghs_installation",
+				SERVERK_RUN_COMMAND: "for fd in 1 2; do grep '^flags:' /proc/$$/fdinfo/$fd; done",
+			});
+			const flags = lines.slice(1).map((line) => Number.parseInt(line.replace("flags:", "").trim(), 8));
+
+			expect(code).toBe(0);
+			expect(lines[0]).toBe("serverk: running: for fd in 1 2; do grep '^flags:' /proc/$$/fdinfo/$fd; done");
+			expect(flags).toHaveLength(2);
+			expect(flags.map((value) => value & 0o4000)).toEqual([
+				0,
+				0,
+			]);
+		},
+	);
+
+	it("passes the command's exit code through without a failure line of its own", () => {
+		writeApp({
+			"index.js": "run()",
+		});
+
+		for (const exit of [
+			0,
+			1,
+			42,
+		]) {
+			const { code, lines } = runCommand({
+				SERVERK_RUN_COMMAND: `echo leaving; exit ${exit}`,
+			});
+
+			expect(code).toBe(exit);
+			expect(lines).toEqual([
+				`serverk: running: echo leaving; exit ${exit}`,
+				"leaving",
+			]);
+		}
+	});
+
+	it("tells the author to deploy first while the bot folder holds no code", () => {
+		mkdirSync(join(app, "node_modules"), {
+			recursive: true,
+		});
+
+		const { code, lines } = runCommand({
+			SERVERK_RUN_COMMAND: "ls",
+		});
+
+		expect(code).toBe(EXIT_CONFIG);
+		expect(lines).toEqual([
+			"serverk: deploy the bot first",
+		]);
+	});
+
+	it("refuses a missing or blank command with the configuration code", () => {
+		writeApp({
+			"index.js": "run()",
+		});
+
+		const blanks: Record<string, string>[] = [
+			{},
+			{
+				SERVERK_RUN_COMMAND: " \t ",
+			},
+		];
+
+		for (const env of blanks) {
+			const { code, lines } = runCommand(env);
+
+			expect(code).toBe(EXIT_CONFIG);
+			expect(lines).toEqual([
+				"serverk: run failed: no command",
+			]);
+		}
+	});
+
+	it("refuses a root directory the bot folder does not hold, like the start does", () => {
+		writeApp({
+			"index.js": "run()",
+		});
+
+		const { code, lines } = runCommand({
+			SERVERK_ROOT_DIRECTORY: "apps/bot",
+			SERVERK_RUN_COMMAND: "ls",
+		});
+
+		expect(code).toBe(EXIT_CONFIG);
+		expect(lines.at(-1)).toBe("serverk: run failed: root directory apps/bot not found");
+	});
+
+	it("never syncs, installs, builds or writes to the state folder, even with a deployment waiting", () => {
+		const bin = join(root, "bin");
+		const calls = join(root, "npm-calls");
+
+		mkdirSync(bin, {
+			recursive: true,
+		});
+		writeFileSync(join(bin, "npm"), `#!/bin/sh\necho "npm $*" >> ${calls}\n`, {
+			mode: 0o755,
+		});
+		writeFileSync(join(bin, "git"), `#!/bin/sh\necho "git $*" >> ${calls}\nexit 1\n`, {
+			mode: 0o755,
+		});
+		writeApp({
+			"index.js": "run()",
+			"package.json": JSON.stringify(BUILD_SCRIPT),
+			"package-lock.json": "{}",
+		});
+		writeFileSync(
+			join(state, DEPLOY_MARKER),
+			JSON.stringify({
+				deployment: "dep_2",
+				reinstall: true,
+			}),
+		);
+
+		const before = listing(app);
+		const { code, lines } = runCommand({
+			PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+			SERVERK_REPO_URL: REMOTE,
+			SERVERK_DEPLOYMENT_ID: "dep_2",
+			SERVERK_INSTALL_COMMAND: "npm install",
+			SERVERK_PRE_DEPLOY_COMMAND: "npm run migrate",
+			SERVERK_RUN_COMMAND: "echo ran",
+		});
+
+		expect(code).toBe(0);
+		expect(lines).toEqual([
+			"serverk: running: echo ran",
+			"ran",
+		]);
+		expect(existsSync(calls)).toBe(false);
+		expect(listing(app)).toEqual(before);
+		expect(readdirSync(state)).toEqual([
+			DEPLOY_MARKER,
+		]);
+	});
 });
