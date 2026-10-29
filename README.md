@@ -25,7 +25,7 @@ This repository holds the Node bot runtime: everything Serverk needs to run your
 - [انقل بوتك من استضافة أخرى · Move your bot in from another host](https://serverk.gg/bots/bot-node/guides/moving-in)
 - [اربط بوتك بريبو GitHub · Link your bot to a GitHub repository](https://serverk.gg/bots/bot-node/guides/connect-github)
 - [أضف زر النشر إلى ريبو بوتك · Add a deploy button to your repository](https://serverk.gg/bots/bot-node/guides/deploy-button)
-- [النشرات والرجوع إلى إصدار سابق · Deployments and rolling back](https://serverk.gg/bots/bot-node/guides/deployments)
+- [النشرات واسترجاع نشر سابق · Deployments and rolling back](https://serverk.gg/bots/bot-node/guides/deployments)
 - [ارفع كود بوتك دون ريبو · Upload your bot's code without a repository](https://serverk.gg/bots/bot-node/guides/upload-zip)
 - [قواعد رفع الكود · Upload rules](https://serverk.gg/bots/bot-node/guides/upload-rules)
 - [كيف نثبّت مشروع Node ونشغّله · How we install and start a Node project](https://serverk.gg/bots/bot-node/guides/project-shapes)
